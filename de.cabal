@@ -62,7 +62,8 @@ library
         linear,
         distributive,
         adjunctions, 
-        mtl
+        mtl,
+        optics
 
     -- Directories containing source files.
     hs-source-dirs:   src
