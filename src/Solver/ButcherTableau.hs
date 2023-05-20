@@ -4,8 +4,8 @@ module Solver.ButcherTableau where
 
 import Control.Monad.State
 import Data.Data (Proxy)
-import Data.Ratio
 import Linear
+import Optics (snoc)
 import Solver.Class
 import Term
 
@@ -20,12 +20,12 @@ butcherTableau ::
   a ->
   a ->
   [T ode a]
-butcherTableau coeffs ode y0 t0 h = foldr go [] coeffs
+butcherTableau coeffs ode y0 t0 h = foldl go [] coeffs
   where
-    go :: (a, [a]) -> [T ode a] -> [T ode a]
-    go (s, as) ks = k : ks
+    -- go :: (a, [a]) -> [T ode a] -> [T ode a]
+    go ks (s, as) = snoc ks k
       where
-        y = foldr (^+^) zero (zipWith (*^) as ks)
+        y = foldr (^+^) y0 (zipWith (*^) as ks)
         t = t0 + s * h
         v = vf ode t y
         u = control ode (t0, t0 + h)
@@ -33,14 +33,14 @@ butcherTableau coeffs ode y0 t0 h = foldr go [] coeffs
 
 rkf45 :: (Floating a) => ([a], [a], [(a, [a])])
 rkf45 =
-  ( [25 / 216, 0, 1408 / 2565, 2197 / 1404, -1 / 5, 0],
+  ( [25 / 216, 0, 1408 / 2565, 2197 / 4104, -1 / 5, 0],
     [16 / 135, 0, 6656 / 12825, 28561 / 56430, -9 / 50, 2 / 55],
     [ (0, []),
       (0.25, [0.25]),
       (3 / 8, [3 / 32, 9 / 32]),
       (12 / 13, [1932 / 2197, -7200 / 2197, 7296 / 2197]),
       (1, [439 / 216, -8, 3680 / 513, -845 / 4104]),
-      (1, [8 / 17, 2, -3544 / 2565, 1859 / 4104, -11 / 40])
+      (0.5, [-8 / 27, 2, -3544 / 2565, 1859 / 4104, -11 / 40])
     ]
   )
 
