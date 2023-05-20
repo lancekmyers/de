@@ -1,6 +1,9 @@
+{-# LANGUAGE GADTs #-}
+
 module Solver.Class where
 
 import Control.Monad.Identity (Identity)
+import Control.Monad.RWS
 import Control.Monad.State
 import Data.Data (Proxy)
 import Data.Functor.Rep
@@ -48,16 +51,16 @@ class (Term ode, Solver solver ode) => Stepper stepper solver ode where
     (T ode a) -> -- y at t1 (candidate)
 
     -- | --- was candidate accepted?
-    m (Bool, (a, a))
+    m (Maybe (T ode a), (a, a))
 
 data ConstantStep a = ConstantStep {constantStepSize :: a}
 
 instance (Solver solver de) => Stepper ConstantStep solver de where
   passedDiscontinuity _ _ _ = False
   initStepper _ _ _ _ dt = ConstantStep dt
-  adaptStep _ _ (_, t1) _ _ = do
+  adaptStep _ _ (_, t1) _y0 y1 = do
     dt <- gets constantStepSize
-    return (True, (t1, t1 + dt))
+    return (Just y1, (t1, t1 + dt))
 
 solveStep ::
   forall solver ode stepper a m.
@@ -69,12 +72,12 @@ solveStep ::
   ode a ->
   (T ode a) ->
   (a, a) ->
-  State (stepper a, solver (T ode) a) ((a, a), T ode a)
+  State (stepper a, solver (T ode) a) ((a, a), Maybe (T ode a))
 solveStep ode y0 (t0, t1) = do
   y1 <- zoom _2 $ step ode y0 (t0, t1)
   solver <- gets (view _2)
   (accepted, step') <- zoom _1 $ adaptStep solver ode (t0, t1) y0 y1
-  return (step', y1)
+  return (step', accepted)
 
 iterateWhileM :: (a -> Bool) -> (a -> State s a) -> a -> State s [a]
 iterateWhileM pred f x =
@@ -82,20 +85,30 @@ iterateWhileM pred f x =
     then (x :) <$> ((f x) >>= iterateWhileM pred f)
     else pure []
 
+iterateSol :: (t, a) -> ((t, a) -> State s (t, Maybe a)) -> State s [(t, a)]
+iterateSol (t, x) step = do
+  (t', x') <- step (t, x)
+  case x' of
+    Nothing -> iterateSol (t', x) step
+    Just x' -> ((t', x') :) <$> iterateSol (t', x') step
+
 solve ::
-  forall a v solver.
-  (Solver solver (SimpleODE v), Additive v, Floating a, Ord a) =>
-  SimpleODE v a ->
-  Proxy solver ->
-  v a ->
+  forall a v ode solver stepper.
+  (Solver solver ode, Stepper stepper solver ode, Floating a, Ord a) =>
+  ode a ->
+  solver (T ode) a ->
+  stepper a ->
+  T ode a ->
   (a, a) ->
-  [((a, a), v a)]
-solve ode _ y0 (ti, tf) = fst $ runState (iterateWhileM pred go ((t0, t1), y0)) (stepper, solver)
+  [((a, a), T ode a)]
+solve ode solver stepper y0 (ti, tf) =
+  takeWhile (\((_, t), _) -> t <= tf) $
+    evalState
+      (iterateSol ((t0, t1), y0) go)
+      (stepper, solver)
   where
     pred = (\((t, _), _) -> t <= tf)
     dt = (tf - ti) / 20
     (t0, t1) = (ti, ti + dt)
-    stepper = initStepper solver ode (t0, t1) y0 dt
-    solver = initSolver ode (t0, t1) y0
-    go :: ((a, a), v a) -> State (ConstantStep a, solver v a) ((a, a), v a)
+    go :: ((a, a), T ode a) -> State (stepper a, solver (T ode) a) ((a, a), Maybe (T ode a))
     go (step, y) = solveStep ode y step
