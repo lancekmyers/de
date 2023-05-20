@@ -1,9 +1,12 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 module Solver where
 
+import Control.Applicative
 import Control.Monad
 import Control.Monad.Identity (Identity)
 import Control.Monad.State
@@ -43,7 +46,7 @@ class (Term de) => Solver sol de where
     de a ->
     (a, a) ->
     T de a ->
-    sol (S de) a
+    sol (T de) a
 
   step ::
     (Additive (T de), Num a, MonadState (sol (T de) a) m) =>
@@ -51,6 +54,9 @@ class (Term de) => Solver sol de where
     (T de) a ->
     (a, a) ->
     m (T de a)
+
+class (Solver sol de) => ErrEst sol de where
+  errorEstimate :: de a -> sol (T de) a -> T de a
 
 data EulerSol v a = EulerSol
 
@@ -63,11 +69,11 @@ instance (Term ode) => Solver EulerSol ode where
 
 data Heun v a = Heun
 
-class Stepper stepper where
-  passedDiscontinuity :: stepper a -> Bool
+class (Term ode, Solver solver ode) => Stepper stepper solver ode where
+  passedDiscontinuity :: ode a -> stepper a -> solver (T ode) a -> Bool
 
   initStepper ::
-    (Term ode) =>
+    solver (T ode) a ->
     ode a ->
     (a, a) ->
     (T ode a) ->
@@ -75,7 +81,7 @@ class Stepper stepper where
     stepper a
 
   adaptStep ::
-    (Solver solver ode, MonadState (stepper a) m, Num a) =>
+    (MonadState (stepper a) m, Num a) =>
     solver (T ode) a ->
     ode a ->
     (a, a) -> -- t0, t1
@@ -87,9 +93,9 @@ class Stepper stepper where
 
 data ConstantStep a = ConstantStep {constantStepSize :: a}
 
-instance Stepper ConstantStep where
-  passedDiscontinuity _ = False
-  initStepper _ _ _ dt = ConstantStep dt
+instance (Solver solver de) => Stepper ConstantStep solver de where
+  passedDiscontinuity _ _ _ = False
+  initStepper _ _ _ _ dt = ConstantStep dt
   adaptStep _ _ (_, t1) _ _ = do
     dt <- gets constantStepSize
     return (True, (t1, t1 + dt))
@@ -98,7 +104,7 @@ solveStep ::
   forall solver ode stepper a m.
   ( Solver solver ode,
     Additive (T ode),
-    Stepper stepper,
+    Stepper stepper solver ode,
     -- MonadState m,
     Num a
   ) =>
@@ -112,19 +118,25 @@ solveStep ode y0 (t0, t1) = do
   (accepted, step') <- zoom _1 $ adaptStep solver ode (t0, t1) y0 y1
   return (step', y1)
 
-iterateM :: (a -> State s a) -> a -> State s [a]
-iterateM f x = (x :) <$> ((f x) >>= iterateM f)
+iterateWhileM :: (a -> Bool) -> (a -> State s a) -> a -> State s [a]
+iterateWhileM pred f x =
+  if pred x
+    then (x :) <$> ((f x) >>= iterateWhileM pred f)
+    else pure []
 
 solve ::
   forall a v.
-  (Additive v, Num a) =>
+  (Additive v, Floating a, Ord a) =>
   SimpleODE v a ->
   v a ->
   (a, a) ->
   [((a, a), v a)]
-solve ode y0 (t0, t1) = fst $ runState (iterateM go ((t0, t1), y0)) (stepper, solver)
+solve ode y0 (ti, tf) = fst $ runState (iterateWhileM pred go ((t0, t1), y0)) (stepper, solver)
   where
-    stepper = initStepper ode (t0, t1) y0 (t1 - t0)
+    pred = (\((t, _), _) -> t <= tf)
+    dt = (tf - ti) / 20
+    (t0, t1) = (ti, ti + dt)
+    stepper = initStepper solver ode (t0, t1) y0 dt
     solver = initSolver ode (t0, t1) y0
     go :: ((a, a), v a) -> State (ConstantStep a, EulerSol v a) ((a, a), v a)
     go (step, y) = solveStep ode y step
