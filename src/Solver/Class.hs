@@ -26,7 +26,7 @@ class (Term de) => Solver sol de where
 
 -- | Solvers which can offer an estimate of their error
 class (Solver sol de) => ErrEst sol de where
-  errorEstimate :: de a -> sol (T de) a -> T de a
+  errorEstimate :: de a -> sol (T de) a -> a
 
 class (Term ode, Solver solver ode) => Stepper stepper solver ode where
   passedDiscontinuity :: ode a -> stepper a -> solver (T ode) a -> Bool

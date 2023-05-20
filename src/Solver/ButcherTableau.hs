@@ -46,15 +46,25 @@ rkf45 =
 
 data RKF45 v a = RKF45 a -- Error estimate
 
-instance (Term ode, Metric (T ode)) => Solver RKF45 ode where
+instance
+  (Term ode, Metric (T ode), Applicative (T ode)) =>
+  Solver RKF45 ode
+  where
   initSolver _ _ _ = RKF45 0
   step ode y0 (t0, t1) = do
     let (final1, final2, coeffs) = rkf45
     let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
     let y1 = foldr (^+^) y0 $ zipWith (*^) final1 ks
     let y1' = foldr (^+^) y0 $ zipWith (*^) final2 ks
-    put $ RKF45 (norm $ y1 ^-^ y1')
+    let err = (\y y' -> (y' - y) / (1e-10 + abs y)) <$> y1 <*> y1'
+    put $ RKF45 (norm $ err)
     return y1
+
+instance
+  (Term ode, Metric (T ode), Applicative (T ode)) =>
+  ErrEst RKF45 ode
+  where
+  errorEstimate de (RKF45 e) = e
 
 stepButcher ::
   (Term de, Floating a, MonadState (sol (T de) a) m) =>
