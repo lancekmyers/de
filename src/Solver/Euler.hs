@@ -1,4 +1,4 @@
-module Solver.Euler (EulerSol, HeunSol) where
+module Solver.Euler (EulerSol (..), HeunSol (..)) where
 
 import Control.Monad.State
 import Linear
