@@ -19,14 +19,17 @@ import Linear.V
 import Linear.Vector
 import Optics
 
-class Term term where
+class
+  (Additive (T term), Additive (S term), Additive (U term)) =>
+  Term term
+  where
   type T term :: Type -> Type
   type S term :: Type -> Type
   type U term :: Type -> Type
 
-  vf :: Num a => term a -> a -> T term a -> S term a
-  control :: Num a => term a -> (a, a) -> U term a
-  prod :: Num a => term a -> S term a -> U term a -> T term a
+  vf :: Floating a => term a -> a -> T term a -> S term a
+  control :: Floating a => term a -> (a, a) -> U term a
+  prod :: Floating a => term a -> S term a -> U term a -> T term a
 
 data SimpleODE v a = SimpleODE (a -> v a -> v a)
 
@@ -49,7 +52,7 @@ class (Term de) => Solver sol de where
     sol (T de) a
 
   step ::
-    (Additive (T de), Num a, MonadState (sol (T de) a) m) =>
+    (Additive (T de), Floating a, MonadState (sol (T de) a) m) =>
     de a ->
     (T de) a ->
     (a, a) ->
@@ -67,7 +70,19 @@ instance (Term ode) => Solver EulerSol ode where
     let dt = control ode (t0, t1)
     return $ y ^+^ prod ode y' dt
 
-data Heun v a = Heun
+data HeunSol v a = HeunSol
+
+instance (Term ode) => Solver HeunSol ode where
+  initSolver _ _ _ = HeunSol
+  step ode y (t0, t1) = do
+    -- EulerStep
+    let y1 = evalState (step ode y (t0, t1)) EulerSol
+    let v1 = vf ode t0 y
+    let v2 = vf ode t1 y1
+    -- average the velocity
+    let v = (v1 ^+^ v2) ^/ 2
+    let dt = control ode (t0, t1)
+    return $ y ^+^ prod ode v dt
 
 class (Term ode, Solver solver ode) => Stepper stepper solver ode where
   passedDiscontinuity :: ode a -> stepper a -> solver (T ode) a -> Bool
@@ -103,10 +118,9 @@ instance (Solver solver de) => Stepper ConstantStep solver de where
 solveStep ::
   forall solver ode stepper a m.
   ( Solver solver ode,
-    Additive (T ode),
     Stepper stepper solver ode,
     -- MonadState m,
-    Num a
+    Floating a
   ) =>
   ode a ->
   (T ode a) ->
@@ -139,4 +153,21 @@ solve ode y0 (ti, tf) = fst $ runState (iterateWhileM pred go ((t0, t1), y0)) (s
     stepper = initStepper solver ode (t0, t1) y0 dt
     solver = initSolver ode (t0, t1) y0
     go :: ((a, a), v a) -> State (ConstantStep a, EulerSol v a) ((a, a), v a)
+    go (step, y) = solveStep ode y step
+
+solve' ::
+  forall a v.
+  (Additive v, Floating a, Ord a) =>
+  SimpleODE v a ->
+  v a ->
+  (a, a) ->
+  [((a, a), v a)]
+solve' ode y0 (ti, tf) = fst $ runState (iterateWhileM pred go ((t0, t1), y0)) (stepper, solver)
+  where
+    pred = (\((t, _), _) -> t <= tf)
+    dt = (tf - ti) / 20
+    (t0, t1) = (ti, ti + dt)
+    stepper = initStepper solver ode (t0, t1) y0 dt
+    solver = initSolver ode (t0, t1) y0
+    go :: ((a, a), v a) -> State (ConstantStep a, HeunSol v a) ((a, a), v a)
     go (step, y) = solveStep ode y step
