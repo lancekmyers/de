@@ -68,7 +68,8 @@ library
         distributive,
         adjunctions, 
         mtl,
-        optics
+        optics,
+        vector 
 
     -- Directories containing source files.
     hs-source-dirs:   src
