@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Solver.Class where
 
@@ -8,7 +9,9 @@ import Control.Monad.State
 import Data.Data (Proxy)
 import Data.Functor.Rep
 import Data.Kind (Type)
+import Debug.Trace (traceShow, traceShowId)
 import Linear
+import Linear.Affine (Vector)
 import Optics
 import Term
 
@@ -21,7 +24,7 @@ class (Term de) => Solver sol de where
     sol (T de) a
 
   step ::
-    (Additive (T de), Floating a, MonadState (sol (T de) a) m) =>
+    (Additive (T de), Floating a, Ord a, MonadState (sol (T de) a) m) =>
     de a ->
     (T de) a ->
     (a, a) ->
@@ -29,21 +32,29 @@ class (Term de) => Solver sol de where
 
 -- | Solvers which can offer an estimate of their error
 class (Solver sol de) => ErrEst sol de where
-  errorEstimate :: de a -> sol (T de) a -> a
+  errorEstimate ::
+    (Ord a, Floating a, Metric (T de)) =>
+    a ->
+    a ->
+    de a ->
+    sol (T de) a ->
+    a
+  errorOrder ::
+    (Ord a, Floating a, Metric (T de)) =>
+    de a ->
+    sol (T de) a ->
+    Int
 
 class (Term ode, Solver solver ode) => Stepper stepper solver ode where
-  passedDiscontinuity :: ode a -> stepper a -> solver (T ode) a -> Bool
-
-  initStepper ::
-    solver (T ode) a ->
+  passedDiscontinuity ::
+    (Metric (T ode), Floating a) =>
     ode a ->
-    (a, a) ->
-    (T ode a) ->
-    a ->
-    stepper a
+    stepper a ->
+    solver (T ode) a ->
+    Bool
 
   adaptStep ::
-    (MonadState (stepper a) m, Num a) =>
+    (MonadState (stepper a) m, Ord a, (Metric (T ode), Floating a)) =>
     solver (T ode) a ->
     ode a ->
     (a, a) -> -- t0, t1
@@ -57,17 +68,40 @@ data ConstantStep a = ConstantStep {constantStepSize :: a}
 
 instance (Solver solver de) => Stepper ConstantStep solver de where
   passedDiscontinuity _ _ _ = False
-  initStepper _ _ _ _ dt = ConstantStep dt
   adaptStep _ _ (_, t1) _y0 y1 = do
     dt <- gets constantStepSize
     return (Just y1, (t1, t1 + dt))
+
+data SimpleAdaptStep a = SimpleAdaptStep
+  { aTol :: a,
+    rTol :: a
+  }
+
+instance
+  (Solver solver de, ErrEst solver de) =>
+  Stepper SimpleAdaptStep solver de
+  where
+  passedDiscontinuity _ _ _ = False
+
+  adaptStep sol ode (t0, t1) _y0 y1 = do
+    SimpleAdaptStep {..} <- get
+    let q = errorOrder ode sol
+    let err = (errorEstimate aTol rTol ode sol)
+    let prop = max 0.25 . min 4 $ (t1 - t0) * (err) -- ^^ (-(q + 1))
+    let h' = 0.9 * prop
+    return $
+      if err > 1
+        then (Nothing, (t0, t0 + h'))
+        else (Just y1, (t1, t1 + h'))
 
 solveStep ::
   forall solver ode stepper a m.
   ( Solver solver ode,
     Stepper stepper solver ode,
     -- MonadState m,
-    Floating a
+    Floating a,
+    Ord a,
+    Show a
   ) =>
   ode a ->
   (T ode a) ->
@@ -94,7 +128,7 @@ iterateSol (t, x) step = do
 
 solve ::
   forall a v ode solver stepper.
-  (Solver solver ode, Stepper stepper solver ode, Floating a, Ord a) =>
+  (Solver solver ode, Stepper stepper solver ode, Floating a, Ord a, Show a) =>
   ode a ->
   solver (T ode) a ->
   stepper a ->

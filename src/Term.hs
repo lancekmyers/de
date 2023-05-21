@@ -6,7 +6,7 @@ import Data.Kind (Type)
 import Linear
 
 class
-  (Additive (T term), Additive (S term), Additive (U term)) =>
+  (Metric (T term), Metric (S term), Metric (U term)) =>
   Term term
   where
   type T term :: Type -> Type
@@ -19,7 +19,7 @@ class
 
 data SimpleODE v a = SimpleODE (a -> v a -> v a)
 
-instance (Additive v) => Term (SimpleODE v) where
+instance (Metric v) => Term (SimpleODE v) where
   type T (SimpleODE v) = v
   type S (SimpleODE v) = v
   type U (SimpleODE v) = V1
