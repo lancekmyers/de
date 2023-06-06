@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module Solver.Class where
 
@@ -14,17 +15,26 @@ import Linear
 import Linear.Affine (Vector)
 import Optics
 import Term
+import Control.Monad.Reader (ReaderT)
 
 class (Term de) => Solver sol de where
+  type SolState  sol de :: Type -> Type 
+  type SolParams sol de :: Type -> Type 
+  
   initSolver ::
     (Num a) =>
     de a ->
     (a, a) ->
     T de a ->
-    sol (T de) a
+    sol (T de) a -> 
+    SolParams sol de a -> 
+    SolState sol de a
 
   step ::
-    (Additive (T de), Floating a, Ord a, MonadState (sol (T de) a) m) =>
+    (Additive (T de), Floating a, Ord a
+    , MonadState  (SolState sol de a) m
+    , MonadReader (SolParams sol de a) m ) =>
+    sol (T de) a -> 
     de a ->
     (T de) a ->
     (a, a) ->
@@ -46,32 +56,27 @@ class (Solver sol de) => ErrEst sol de where
     Int
 
 class (Term ode, Solver solver ode) => Stepper stepper solver ode where
-  passedDiscontinuity ::
-    (Metric (T ode), Floating a) =>
-    ode a ->
-    stepper a ->
-    solver (T ode) a ->
-    Bool
-
   adaptStep ::
     (MonadState (stepper a) m, Ord a, (Metric (T ode), Floating a)) =>
-    solver (T ode) a ->
+    SolState solver ode a ->
+    solver (T ode) a -> 
+    stepper a ->
     ode a ->
     (a, a) -> -- t0, t1
     (T ode a) -> -- y at t0
     (T ode a) -> -- y at t1 (candidate)
-
     -- | --- was candidate accepted?
     m (Maybe (T ode a), (a, a))
 
 data ConstantStep a = ConstantStep {constantStepSize :: a}
 
 instance (Solver solver de) => Stepper ConstantStep solver de where
-  passedDiscontinuity _ _ _ = False
-  adaptStep _ _ (_, t1) _y0 y1 = do
+  -- passedDiscontinuity _ _ _ = False
+  adaptStep _ _ _ _ (_, t1) _y0 y1 = do
     dt <- gets constantStepSize
     return (Just y1, (t1, t1 + dt))
 
+-- | I controller 
 data SimpleAdaptStep a = SimpleAdaptStep
   { aTol :: a,
     rTol :: a
@@ -81,9 +86,9 @@ instance
   (Solver solver de, ErrEst solver de) =>
   Stepper SimpleAdaptStep solver de
   where
-  passedDiscontinuity _ _ _ = False
+  -- passedDiscontinuity _ _ _ = False
 
-  adaptStep sol ode (t0, t1) _y0 y1 = do
+  adaptStep solState sol _ ode (t0, t1) _y0 y1 = do
     SimpleAdaptStep {..} <- get
     let q = errorOrder ode sol
     let err = (errorEstimate aTol rTol ode sol)
@@ -95,22 +100,26 @@ instance
         else (Just y1, (t1, t1 + h'))
 
 solveStep ::
-  forall solver ode stepper a m.
+  forall solver ode stepper a.
   ( Solver solver ode,
     Stepper stepper solver ode,
-    -- MonadState m,
     Floating a,
     Ord a,
     Show a
   ) =>
   ode a ->
+  solver (T ode) a -> 
+  stepper a -> 
   (T ode a) ->
   (a, a) ->
-  State (stepper a, solver (T ode) a) ((a, a), Maybe (T ode a))
-solveStep ode y0 (t0, t1) = do
-  y1 <- zoom _2 $ step ode y0 (t0, t1)
-  solver <- gets (view _2)
-  (accepted, step') <- zoom _1 $ adaptStep solver ode (t0, t1) y0 y1
+  RWS (SolParams solver ode a) () (stepper a, SolState solver ode a) (
+     ((a, a), Maybe (T ode a))
+  )
+solveStep ode sol stepper y0 (t0, t1) = do
+  y1 <- zoom _2 $ step sol ode y0 (t0, t1)
+  solState <- gets (view _2)
+  (accepted, step') <- zoom _1 $ 
+    adaptStep solState sol stepper ode (t0, t1) y0 y1
   return (step', accepted)
 
 iterateWhileM :: (a -> Bool) -> (a -> State s a) -> a -> State s [a]
@@ -126,6 +135,7 @@ iterateSol (t, x) step = do
     Nothing -> iterateSol (t', x) step
     Just x' -> ((t', x') :) <$> iterateSol (t', x') step
 
+{-
 solve ::
   forall a v ode solver stepper.
   (Solver solver ode, Stepper stepper solver ode, Floating a, Ord a, Show a) =>
@@ -145,4 +155,5 @@ solve ode solver stepper y0 (ti, tf) =
     dt = (tf - ti) / 20
     (t0, t1) = (ti, ti + dt)
     go :: ((a, a), T ode a) -> State (stepper a, solver (T ode) a) ((a, a), Maybe (T ode a))
-    go (step, y) = solveStep ode y step
+    go (step, y) = solveStep ode solver stepper y step
+-}

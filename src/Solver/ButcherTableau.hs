@@ -1,29 +1,35 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 module Solver.ButcherTableau where
 
+import Control.Applicative (Const)
+import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State
 import Data.Data (Proxy)
 import Data.Maybe (fromJust)
 import Data.Vector (Vector)
 import qualified Data.Vector as V
 import GHC.Exts (IsList)
+import GHC.Generics (Generic)
 import Linear
 import Linear.V
-import Optics (snoc)
-import Solver.Class
+import Optics
+import Solver.Class (Solver (..))
 import Term
 
-newtype BT a = BT ([a], [(a, [a])])
+-- newtype BT a = BT ([a], [(a, [a])])
 
-data BT' n a = BT'
+data BT a = BT
   { coeffs :: ([(a, Vector a)]),
-    f1 :: V n a,
-    f2 :: V n a
+    f1 :: Vector a,
+    f2 :: Vector a
   }
+  deriving (Generic)
 
 butcherTableau ::
   forall a ode.
@@ -45,15 +51,15 @@ butcherTableau coeffs ode y0 t0 h = foldl go [] coeffs
         u = control ode (t0, t0 + h)
         k = prod ode v u
 
-rkf45 :: (Floating a) => (BT' 6 a)
+rkf45 :: (Floating a) => (BT a)
 rkf45 =
-  BT'
+  BT
     { f1 =
-        fromJust . fromVector $
-          [25 / 216, 0, 1408 / 2565, 2197 / 4104, -1 / 5, 0],
+        -- fromJust . fromVector $
+        [25 / 216, 0, 1408 / 2565, 2197 / 4104, -1 / 5, 0],
       f2 =
-        fromJust . fromVector $
-          [16 / 135, 0, 6656 / 12825, 28561 / 56430, -9 / 50, 2 / 55],
+        -- fromJust . fromVector $
+        [16 / 135, 0, 6656 / 12825, 28561 / 56430, -9 / 50, 2 / 55],
       coeffs =
         [ (0, []),
           (0.25, [0.25]),
@@ -64,53 +70,93 @@ rkf45 =
         ]
     }
 
+-- | Explicit Runge Kutta
+data ERK v a = ERK
+
+data ERK_State v a = ERK_State {errEst :: a}
+  deriving (Generic)
+
+data ERK_Params v a = ERK_Params
+  { bt :: BT a,
+    tol :: Tol a
+  }
+  deriving (Generic)
+
 data RKF45 v a = RKF45 (v a) (v a) -- Error estimate
 
-instance
-  (Term ode, Metric (T ode)) =>
-  Solver RKF45 ode
-  where
-  initSolver _ _ _ = RKF45 zero zero
-  step ode y0 (t0, t1) = do
-    let BT' {..} = rkf45
+data Tol a = Tol {aTol :: a, rTol :: a}
+
+instance (Term ode) => Solver ERK ode where
+  type SolState ERK ode = ERK_State (T ode)
+  type SolParams ERK ode = ERK_Params (T ode)
+
+  initSolver _ _ _ _ _ = ERK_State 0
+  step _erk ode y0 (t0, t1) = do
+    BT {..} <- view #bt <$> ask
+    Tol {..} <- view #tol <$> ask
     let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
-    let y1 = foldr (^+^) y0 $ V.zipWith (*^) (toVector f1) ks
-    let y1' = foldr (^+^) y0 $ V.zipWith (*^) (toVector f2) ks
+    let y1 = foldr (^+^) y0 $ V.zipWith (*^) f1 ks
+
+    -- for error estimation
+    let y1' = foldr (^+^) y0 $ V.zipWith (*^) f2 ks
     let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
-    let err = y1 ^-^ y1'
-    put $ RKF45 err yy
+    let diff = y1 ^-^ y1'
+    let tol = (rTol *^ yy) <&> (+ aTol)
+    let err = norm $ liftI2 (/) diff tol
+    assign #errEst err
+
     return y1
 
-instance
-  (Term ode, Metric (T ode)) =>
-  ErrEst RKF45 ode
-  where
-  errorOrder _ _ = 4
-  errorEstimate atol rtol de (RKF45 err yy) =
-    let tol = rtol *^ yy
-     in norm $ liftI2 (\e t -> e / (atol + t)) err tol
+-- assign
+
+-- instance
+--   (Term ode, Metric (T ode)) =>
+--   Solver RKF45 ode
+--   where
+--   type SolState RKF45 ode = Const ()
+--   type SolParams RKF45 ode = Tol
+
+--   initSolver _ _ _ = RKF45 zero zero
+--   step ode y0 (t0, t1) = do
+--     let BT' {..} = rkf45
+-- let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
+-- let y1 = foldr (^+^) y0 $ V.zipWith (*^) (toVector f1) ks
+-- let y1' = foldr (^+^) y0 $ V.zipWith (*^) (toVector f2) ks
+-- let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
+-- let err = y1 ^-^ y1'
+--     put $ RKF45 err yy
+--     return y1
+
+-- instance
+--   (Term ode, Metric (T ode)) =>
+--   ErrEst RKF45 ode
+--   where
+--   errorOrder _ _ = 4
+--   errorEstimate atol rtol de (RKF45 err yy) =
+--     let tol = rtol *^ yy
+--      in norm $ liftI2 (\e t -> e / (atol + t)) err tol
 
 stepButcher ::
   (Term de, Floating a, MonadState (sol (T de) a) m) =>
-  BT' n a ->
+  BT a ->
   de a ->
   (T de) a ->
   (a, a) ->
   m (T de a)
-stepButcher BT' {..} ode y0 (t0, t1) = do
+stepButcher BT {..} ode y0 (t0, t1) = do
   let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
-  let y1 = foldr (^+^) y0 $ V.zipWith (*^) (toVector f1) ks
+  let y1 = foldr (^+^) y0 $ V.zipWith (*^) f1 ks
   return y1
 
-dopri :: BT' 7 Double
+dopri :: BT Double
 dopri =
-  BT'
+  BT
     { f1 =
-        fromJust . fromVector $
-          [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84, 0],
+        -- fromJust . fromVector $
+        [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84, 0],
       f2 =
-        fromJust . fromVector $
-          [5179 / 57600, 0, 7571 / 16695, 393 / 640, -92097 / 339200, 187 / 2100, 1 / 40],
+        -- fromJust . fromVector $
+        [5179 / 57600, 0, 7571 / 16695, 393 / 640, -92097 / 339200, 187 / 2100, 1 / 40],
       coeffs =
         [ (0, []),
           (1 / 5, [1 / 5]),
