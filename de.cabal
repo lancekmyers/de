@@ -51,6 +51,7 @@ library
     -- Modules exported by the library.
     exposed-modules: 
         Solver, 
+        Interpolate,
         Term
 
     -- Modules included in this library but not exported.

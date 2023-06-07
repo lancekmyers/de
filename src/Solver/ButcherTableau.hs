@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Solver.ButcherTableau where
+module Solver.ButcherTableau (BT (..), ERK (..), Tol (..), ERK_Params (..), dopri5, bosh3) where
 
 import Control.Applicative (Const)
 import Control.Monad.Reader (MonadReader (..))
@@ -16,13 +16,16 @@ import Data.Vector (Vector)
 import qualified Data.Vector as V
 import GHC.Exts (IsList)
 import GHC.Generics (Generic)
+import Interpolate
 import Linear
 import Linear.V
 import Optics
-import Solver.Class (Solver (..))
+import Solver.Class (ErrEst (..), Solver (..))
 import Term
 
--- newtype BT a = BT ([a], [(a, [a])])
+-- | Weighted sum of vector s
+wsum :: (Num a, Additive v) => V.Vector a -> V.Vector (v a) -> v a
+wsum cs vs = V.foldr (^+^) zero (V.zipWith (*^) cs vs)
 
 data BT a = BT
   { coeffs :: ([(a, Vector a)]),
@@ -39,20 +42,74 @@ butcherTableau ::
   T ode a ->
   a ->
   a ->
-  V.Vector (T ode a)
+  V.Vector (S ode a)
 butcherTableau coeffs ode y0 t0 h = foldl go [] coeffs
   where
-    go :: Vector (T ode a) -> (a, Vector a) -> Vector (T ode a)
-    go ks (s, as) = snoc ks k
+    go :: Vector (S ode a) -> (a, Vector a) -> Vector (S ode a)
+    go ks (s, as) = snoc ks v
       where
-        y = foldr (^+^) y0 (V.zipWith (*^) as ks)
+        y = y0 ^+^ prod ode (wsum as ks) u
         t = t0 + s * h
         v = vf ode t y
         u = control ode (t0, t0 + h)
-        k = prod ode v u
 
-rkf45 :: (Floating a) => (BT a)
-rkf45 =
+-- k = prod ode v u
+
+-- | Explicit Runge Kutta
+data ERK v a = ERK {bt :: BT a, interpCoeff :: Maybe (V.Vector a)}
+
+data ERK_State v a = ERK_State {errEst :: a}
+  deriving (Generic)
+
+data ERK_Params v a = ERK_Params
+  {tol :: Tol a}
+  deriving (Generic)
+
+data RKF45 v a = RKF45 (v a) (v a) -- Error estimate
+
+data Tol a = Tol {aTol :: a, rTol :: a}
+
+instance (Term ode) => Solver ERK ode where
+  type SolState ERK ode = ERK_State (T ode)
+  type SolParams ERK ode = ERK_Params (T ode)
+
+  initSolver _ _ _ _ _ = ERK_State 0
+  step (ERK (BT {..}) ics) ode y0 (t0, t1) = do
+    Tol {..} <- view #tol <$> ask
+
+    let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
+    let u = control ode (t0, t1) -- is this the right thing??
+    let y1 = y0 ^+^ prod ode (wsum f1 ks) u
+
+    -- for error estimation
+    let y1' = y0 ^+^ prod ode (wsum f2 ks) u
+    let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
+    let diff = y1 ^-^ y1'
+    let tol = (rTol *^ yy) <&> (+ aTol)
+    let err = norm $ liftI2 (/) diff tol
+    assign #errEst err
+
+    -- return $ H3 (t0, t1) (V.head ks) y0 (V.last ks) y1
+
+    return $ case ics of
+      Nothing -> H3 (t0, t1) (V.head ks) y0 (V.last ks) y1
+      Just ics ->
+        let ymid =
+              y0
+                ^+^ prod
+                  ode
+                  (wsum ics ks)
+                  u -- (control ode (t0, t0 + 1 {- this or u? -}))
+         in H4 (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
+
+instance Term ode => ErrEst ERK ode where
+  errorEstimate _ _ (ERK_State errEst) = errEst
+  errorOrder de (ERK {bt}) = length $ f1 bt
+
+--------
+
+rkf45_bt :: (Floating a) => BT a
+rkf45_bt =
   BT
     { f1 =
         -- fromJust . fromVector $
@@ -70,86 +127,8 @@ rkf45 =
         ]
     }
 
--- | Explicit Runge Kutta
-data ERK v a = ERK
-
-data ERK_State v a = ERK_State {errEst :: a}
-  deriving (Generic)
-
-data ERK_Params v a = ERK_Params
-  { bt :: BT a,
-    tol :: Tol a
-  }
-  deriving (Generic)
-
-data RKF45 v a = RKF45 (v a) (v a) -- Error estimate
-
-data Tol a = Tol {aTol :: a, rTol :: a}
-
-instance (Term ode) => Solver ERK ode where
-  type SolState ERK ode = ERK_State (T ode)
-  type SolParams ERK ode = ERK_Params (T ode)
-
-  initSolver _ _ _ _ _ = ERK_State 0
-  step _erk ode y0 (t0, t1) = do
-    BT {..} <- view #bt <$> ask
-    Tol {..} <- view #tol <$> ask
-    let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
-    let y1 = foldr (^+^) y0 $ V.zipWith (*^) f1 ks
-
-    -- for error estimation
-    let y1' = foldr (^+^) y0 $ V.zipWith (*^) f2 ks
-    let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
-    let diff = y1 ^-^ y1'
-    let tol = (rTol *^ yy) <&> (+ aTol)
-    let err = norm $ liftI2 (/) diff tol
-    assign #errEst err
-
-    return y1
-
--- assign
-
--- instance
---   (Term ode, Metric (T ode)) =>
---   Solver RKF45 ode
---   where
---   type SolState RKF45 ode = Const ()
---   type SolParams RKF45 ode = Tol
-
---   initSolver _ _ _ = RKF45 zero zero
---   step ode y0 (t0, t1) = do
---     let BT' {..} = rkf45
--- let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
--- let y1 = foldr (^+^) y0 $ V.zipWith (*^) (toVector f1) ks
--- let y1' = foldr (^+^) y0 $ V.zipWith (*^) (toVector f2) ks
--- let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
--- let err = y1 ^-^ y1'
---     put $ RKF45 err yy
---     return y1
-
--- instance
---   (Term ode, Metric (T ode)) =>
---   ErrEst RKF45 ode
---   where
---   errorOrder _ _ = 4
---   errorEstimate atol rtol de (RKF45 err yy) =
---     let tol = rtol *^ yy
---      in norm $ liftI2 (\e t -> e / (atol + t)) err tol
-
-stepButcher ::
-  (Term de, Floating a, MonadState (sol (T de) a) m) =>
-  BT a ->
-  de a ->
-  (T de) a ->
-  (a, a) ->
-  m (T de a)
-stepButcher BT {..} ode y0 (t0, t1) = do
-  let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
-  let y1 = foldr (^+^) y0 $ V.zipWith (*^) f1 ks
-  return y1
-
-dopri :: BT Double
-dopri =
+dopri_bt :: Floating a => BT a
+dopri_bt =
   BT
     { f1 =
         -- fromJust . fromVector $
@@ -167,3 +146,35 @@ dopri =
           (1, [35 / 384, 0, 500 / 1113, 125 / 192, -2187 / 6784, 11 / 84])
         ]
     }
+
+dopri5_interp :: Floating a => Vector a
+dopri5_interp =
+  V.fromList
+    [ 6025192743 / 30085553152 / 2,
+      0,
+      51252292925 / 65400821598 / 2,
+      -2691868925 / 45128329728 / 2,
+      187940372067 / 1594534317056 / 2,
+      -1776094331 / 19743644256 / 2,
+      11237099 / 235043384 / 2
+    ]
+
+{-# SPECIALIZE dopri5 :: ERK v Double #-}
+dopri5 :: Floating a => ERK v a
+dopri5 = ERK {bt = dopri_bt, interpCoeff = Just dopri5_interp}
+
+bosh3_bt :: Floating a => BT a
+bosh3_bt =
+  BT
+    { coeffs =
+        [ (1 / 2, [1 / 2]),
+          (3 / 4, [0.0, 3 / 4]),
+          (1.0, [2 / 9, 1 / 3, 4 / 9])
+        ],
+      f1 = [2 / 9, 1 / 3, 4 / 9, 0.0],
+      f2 = [7 / 24, 1 / 4, 1 / 3, -1 / 8]
+    }
+
+-- | Bogacki--Shampine's 3/2 method aka Ralston's third order
+bosh3 :: Floating a => ERK v a
+bosh3 = ERK bosh3_bt Nothing
