@@ -94,4 +94,4 @@ test-suite de-test
         Tester
     -- Test dependencies.
     build-depends:    base ^>=4.16.1.0, 
-        tasty, linear, de
+        tasty, linear, vector, de
