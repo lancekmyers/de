@@ -34,7 +34,7 @@ testDopriAdapt ivp =
 testBoshAdapt ivp =
   DETest
     bosh3
-    (ERK_Params (Tol 1e-6 1e-6))
+    (ERK_Params (Tol 1e-4 1e-4))
     SimpleAdaptStep
     expIVP
     1e-2
