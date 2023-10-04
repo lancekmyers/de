@@ -147,6 +147,11 @@ dopri_bt =
         ]
     }
 
+-- from page 6 of "Runge–Kutta pairs of orders 5(4) satisfying only the first column simplifying assumption"
+-- http://users.uoa.gr/~tsitourasc/RK54_new_v2.pdf
+tsit5_interp :: Floating a => Vector (Vector a)
+tsit5_interp = undefined
+
 dopri5_interp :: Floating a => Vector a
 dopri5_interp =
   V.fromList
