@@ -61,21 +61,52 @@ interp de t (H4 (t0, t1) ymid y0 y1 f0 f1) = polyEval coeffs t'
     -- should add some sort of constraint
     -- class (Term ode, U ode a ~ a) => PlainControl ode
     --   inj :: S ode a -> T ode a
-    one s = prod de s $ control de (t0, t1) -- control de (0, 1)
+    w = control de (t0, t1) -- control de (0, 1)
+    one s = prod de s $ w
     _a = 2 *^ (one $ f1 ^-^ f0) ^-^ 8 *^ (y1 ^+^ y0) ^+^ 16 *^ ymid
     _b = 5 *^ one f0 ^-^ 3 *^ one f1 ^+^ 18 *^ y0 ^+^ 14 *^ y1 ^-^ 32 *^ ymid
     _c = one f1 ^-^ 4 *^ one f0 ^-^ 11 *^ y0 ^-^ 5 *^ y1 ^+^ 16 *^ ymid
     -- reversing [y0, one f0, _c, _b, _a]
     coeffs = V.fromList [_a, _b, _c, one f0, y0]
 
+-- | Fourth Order Hermite polynomial interpolation
+mkH4 ::
+  forall de a.
+  (Term de, Floating a) =>
+  de a ->
+  (a, a) ->
+  T de a ->
+  T de a ->
+  T de a ->
+  S de a ->
+  S de a ->
+  Interp de a
+mkH4 de (t0, t1) ymid y0 y1 f0 f1 = Poly (t0, t1) coeffs
+  where
+    w = control de (t0, t1) -- control de (0, 1)
+    f1' = prod de f1 w
+    f0' = prod de f0 w
+    _a =
+      2 *^ (f1' ^-^ f0')
+        ^-^ 8 *^ (y1 ^+^ y0) ^+^ 16 *^ ymid
+    _b =
+      5 *^ f0' ^-^ 3 *^ f1'
+        ^+^ 18 *^ y0
+        ^+^ 14 *^ y1 ^-^ 32 *^ ymid
+    _c =
+      f1' ^-^ 4 *^ f0'
+        ^-^ 11 *^ y0
+        ^-^ 5 *^ y1 ^+^ 16 *^ ymid
+    coeffs = V.fromList [_a, _b, _c, f0', y0]
+
 rightMost :: (Num a, Additive (T de)) => Interp de a -> T de a
-rightMost (Poly _ coeffs) = polyEval coeffs 1
+rightMost (Poly _ coeffs) = V.foldl' (^+^) zero coeffs
 rightMost (Lin _ _ y1) = y1
 rightMost (H3 _ _ _ _ y1) = y1
 rightMost (H4 _ _ _ y1 _ _) = y1
 
 leftMost :: (Num a, Additive (T de)) => Interp de a -> T de a
-leftMost (Poly _ coeffs) = polyEval coeffs 0
+leftMost (Poly _ coeffs) = polyEval coeffs 0 -- V.last coeffs
 leftMost (Lin _ y0 _) = y0
 leftMost (H3 _ _ y0 _ _) = y0
 leftMost (H4 _ _ y0 _ _ _) = y0
