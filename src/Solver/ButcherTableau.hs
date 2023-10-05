@@ -99,8 +99,8 @@ instance (Term ode) => Solver ERK ode where
                 ^+^ prod
                   ode
                   (wsum ics ks)
-                  u -- (control ode (t0, t0 + 1 {- this or u? -}))
-         in H4 (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
+                  u
+         in mkH4 ode (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
 
 instance Term ode => ErrEst ERK ode where
   errorEstimate _ _ (ERK_State errEst) = errEst

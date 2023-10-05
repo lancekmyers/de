@@ -1,4 +1,4 @@
-module Interpolate (Interp (..), interp, rightMost, evalSol, knots) where
+module Interpolate (Interp (..), interp, rightMost, evalSol, knots, mkH4) where
 
 import Data.Vector (Vector)
 import qualified Data.Vector as V
@@ -14,16 +14,6 @@ data Interp de a
         m' :: S de a,
         p' :: T de a
       }
-  | H4
-      (a, a)
-      (T de a)
-      -- ^ y_mid i.e. dot cs ks
-      (T de a)
-      -- ^ y0
-      (T de a)
-      -- ^ y1
-      (S de a)
-      (S de a)
   | Lin (a, a) (T de a) (T de a)
   | Poly (a, a) (Vector (T de a))
 
@@ -54,20 +44,6 @@ interp de x (H3 (x0, x1) m p m' p') =
     h10 = t * (1 - t) ^^ 2
     h01 = t ^^ 2 * (3 - 2 * t)
     h11 = t ^^ 2 * (t - 1)
-interp de t (H4 (t0, t1) ymid y0 y1 f0 f1) = polyEval coeffs t'
-  where
-    t' = (t - t0) / (t1 - t0)
-    -- this is nonsense whenever the control is nontrivial
-    -- should add some sort of constraint
-    -- class (Term ode, U ode a ~ a) => PlainControl ode
-    --   inj :: S ode a -> T ode a
-    w = control de (t0, t1) -- control de (0, 1)
-    one s = prod de s $ w
-    _a = 2 *^ (one $ f1 ^-^ f0) ^-^ 8 *^ (y1 ^+^ y0) ^+^ 16 *^ ymid
-    _b = 5 *^ one f0 ^-^ 3 *^ one f1 ^+^ 18 *^ y0 ^+^ 14 *^ y1 ^-^ 32 *^ ymid
-    _c = one f1 ^-^ 4 *^ one f0 ^-^ 11 *^ y0 ^-^ 5 *^ y1 ^+^ 16 *^ ymid
-    -- reversing [y0, one f0, _c, _b, _a]
-    coeffs = V.fromList [_a, _b, _c, one f0, y0]
 
 -- | Fourth Order Hermite polynomial interpolation
 mkH4 ::
@@ -103,17 +79,14 @@ rightMost :: (Num a, Additive (T de)) => Interp de a -> T de a
 rightMost (Poly _ coeffs) = V.foldl' (^+^) zero coeffs
 rightMost (Lin _ _ y1) = y1
 rightMost (H3 _ _ _ _ y1) = y1
-rightMost (H4 _ _ _ y1 _ _) = y1
 
 leftMost :: (Num a, Additive (T de)) => Interp de a -> T de a
 leftMost (Poly _ coeffs) = polyEval coeffs 0 -- V.last coeffs
 leftMost (Lin _ y0 _) = y0
 leftMost (H3 _ _ y0 _ _) = y0
-leftMost (H4 _ _ y0 _ _ _) = y0
 
 timeInterval :: Interp de a -> (a, a)
 timeInterval (Poly interval _) = interval
-timeInterval (H4 interval _ _ _ _ _) = interval
 timeInterval (H3 interval _ _ _ _) = interval
 timeInterval (Lin interval _ _) = interval
 
