@@ -1,4 +1,13 @@
-module Interpolate (Interp (..), interp, rightMost, evalSol, knots, mkH4) where
+module Interpolate
+  ( Interp (..),
+    interp,
+    rightMost,
+    evalSol,
+    knots,
+    mkH4,
+    mkLin,
+  )
+where
 
 import Data.Vector (Vector)
 import qualified Data.Vector as V
@@ -14,7 +23,6 @@ data Interp de a
         m' :: S de a,
         p' :: T de a
       }
-  | Lin (a, a) (T de a) (T de a)
   | Poly (a, a) (Vector (T de a))
 
 interp ::
@@ -27,10 +35,6 @@ interp ::
 interp de c (Poly (t0, t1) coeffs) = polyEval coeffs c'
   where
     c' = (c - t0) / (t1 - t0)
-interp de x (Lin (x0, x1) p p') =
-  t *^ p ^+^ (1 - t) *^ p'
-  where
-    t = (x - x0) / x1 - x0
 interp de x (H3 (x0, x1) m p m' p') =
   h00 *^ p
     ^+^ h10 *^ (prod de m w)
@@ -44,6 +48,15 @@ interp de x (H3 (x0, x1) m p m' p') =
     h10 = t * (1 - t) ^^ 2
     h01 = t ^^ 2 * (3 - 2 * t)
     h11 = t ^^ 2 * (t - 1)
+
+mkLin ::
+  (Additive (T de), Num a) =>
+  de a ->
+  (a, a) ->
+  T de a ->
+  T de a ->
+  Interp de a
+mkLin _de (t0, t1) y0 y1 = Poly (t0, t1) (V.fromList [y1 ^-^ y0, y0])
 
 -- | Fourth Order Hermite polynomial interpolation
 mkH4 ::
@@ -77,18 +90,15 @@ mkH4 de (t0, t1) ymid y0 y1 f0 f1 = Poly (t0, t1) coeffs
 
 rightMost :: (Num a, Additive (T de)) => Interp de a -> T de a
 rightMost (Poly _ coeffs) = V.foldl' (^+^) zero coeffs
-rightMost (Lin _ _ y1) = y1
 rightMost (H3 _ _ _ _ y1) = y1
 
 leftMost :: (Num a, Additive (T de)) => Interp de a -> T de a
 leftMost (Poly _ coeffs) = polyEval coeffs 0 -- V.last coeffs
-leftMost (Lin _ y0 _) = y0
 leftMost (H3 _ _ y0 _ _) = y0
 
 timeInterval :: Interp de a -> (a, a)
 timeInterval (Poly interval _) = interval
 timeInterval (H3 interval _ _ _ _) = interval
-timeInterval (Lin interval _ _) = interval
 
 polyEval :: (Num a, Additive v) => V.Vector (v a) -> a -> v a
 polyEval coeffs t = V.foldl' (\acc x -> x ^+^ (t *^ acc)) zero coeffs

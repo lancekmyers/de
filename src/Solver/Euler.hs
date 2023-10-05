@@ -20,7 +20,7 @@ instance (Term ode) => Solver EulerSol ode where
     let y' = vf ode t0 y
     let dt = control ode (t0, t1)
     let y1 = y ^+^ prod ode y' dt
-    return $ Lin (t0, t1) y y1
+    return $ mkLin ode (t0, t1) y y1
 
 data HeunSol v a = HeunSol
 
@@ -42,4 +42,4 @@ instance (Term ode) => Solver HeunSol ode where
     let v = (v1 ^+^ v2) ^/ 2
     let dt = control ode (t0, t1)
     let y2 = y ^+^ prod ode v dt
-    return $ Lin (t0, t1) y y2
+    return $ mkLin ode (t0, t1) y y2
