@@ -56,7 +56,16 @@ butcherTableau coeffs ode y0 t0 h = foldl go [] coeffs
 -- k = prod ode v u
 
 -- | Explicit Runge Kutta
-data ERK v a = ERK {bt :: BT a, interpCoeff :: Maybe (V.Vector a)}
+data ERK v a = ERK {bt :: BT a, interpCoeff :: IC a}
+
+-- | Iterpolation Coefficients
+data IC a
+  = InterpLinear
+  | -- use the normal Hermite 3rd order polynomial
+    PlainH3
+  | -- coeffs for computing midpoint to construct Hermite 4th order polynomial
+    MidPointH4 (V.Vector a)
+  | InterpMatrix (V.Vector (V.Vector a))
 
 data ERK_State v a = ERK_State {errEst :: a}
   deriving (Generic)
@@ -89,11 +98,10 @@ instance (Term ode) => Solver ERK ode where
     let err = norm $ liftI2 (/) diff tol
     assign #errEst err
 
-    -- return $ H3 (t0, t1) (V.head ks) y0 (V.last ks) y1
-
     return $ case ics of
-      Nothing -> mkH3 ode (t0, t1) y0 (V.head ks) y1 (V.last ks)
-      Just ics ->
+      InterpLinear -> mkLin ode (t0, t1) y0 y1
+      PlainH3 -> mkH3 ode (t0, t1) y0 (V.head ks) y1 (V.last ks)
+      MidPointH4 ics ->
         let ymid =
               y0
                 ^+^ prod
@@ -101,6 +109,9 @@ instance (Term ode) => Solver ERK ode where
                   (wsum ics ks)
                   u
          in mkH4 ode (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
+      InterpMatrix mat ->
+        let coeffs = (flip (prod ode) u) . (flip wsum ks) <$> mat
+         in Poly (t0, t1) coeffs
 
 instance Term ode => ErrEst ERK ode where
   errorEstimate _ _ (ERK_State errEst) = errEst
@@ -166,7 +177,7 @@ dopri5_interp =
 
 {-# SPECIALIZE dopri5 :: ERK v Double #-}
 dopri5 :: Floating a => ERK v a
-dopri5 = ERK {bt = dopri_bt, interpCoeff = Just dopri5_interp}
+dopri5 = ERK {bt = dopri_bt, interpCoeff = MidPointH4 dopri5_interp}
 
 bosh3_bt :: Floating a => BT a
 bosh3_bt =
@@ -182,4 +193,4 @@ bosh3_bt =
 
 -- | Bogacki--Shampine's 3/2 method aka Ralston's third order
 bosh3 :: Floating a => ERK v a
-bosh3 = ERK bosh3_bt Nothing
+bosh3 = ERK bosh3_bt PlainH3
