@@ -13,6 +13,7 @@ import Solver.ButcherTableau as BTab
     Tol (..),
     bosh3,
     dopri5,
+    tsit5,
   )
 import Solver.Class as C
   ( ConstantStep (..),
