@@ -92,7 +92,7 @@ instance (Term ode) => Solver ERK ode where
     -- return $ H3 (t0, t1) (V.head ks) y0 (V.last ks) y1
 
     return $ case ics of
-      Nothing -> H3 (t0, t1) (V.head ks) y0 (V.last ks) y1
+      Nothing -> mkH3 ode (t0, t1) y0 (V.head ks) y1 (V.last ks)
       Just ics ->
         let ymid =
               y0
