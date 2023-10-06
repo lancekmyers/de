@@ -48,6 +48,7 @@ data DETest where
   DETest ::
     forall sol stepper ode a.
     ( Floating a,
+      Real a,
       Show a,
       Ord a,
       Solver sol ode,

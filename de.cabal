@@ -79,6 +79,11 @@ library
     default-language: GHC2021
 
 test-suite de-test
+    ghc-options: 
+        -O3
+        -fllvm
+        -flate-dmd-anal
+        -fspecialize-aggressively
     -- Base language which the package is written in.
     default-language: GHC2021
 
@@ -87,7 +92,7 @@ test-suite de-test
 
     -- Directories containing source files.
     hs-source-dirs:   test
-
+    
     -- The entrypoint to the test suite.
     main-is:          MyLibTest.hs
     other-modules: 

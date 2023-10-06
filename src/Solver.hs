@@ -16,11 +16,17 @@ import Solver.ButcherTableau as BTab
     tsit5,
   )
 import Solver.Class as C
-  ( ConstantStep (..),
+  ( ConstantStepper (..),
     ErrEst (..),
-    SimpleAdaptStep (..),
     Solver (..),
     Stepper (..),
+    StepperPID (..),
+    basicI,
+    h211PI,
+    h312PID,
+    pi33,
+    pi34,
+    pi42,
     solve,
   )
 import Solver.Euler as Euler

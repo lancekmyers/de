@@ -1,8 +1,23 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Solver.Class where
+module Solver.Class
+  ( StepperPID,
+    basicI,
+    pi42,
+    pi33,
+    pi34,
+    h211PI,
+    h312PID,
+    ConstantStepper (..),
+    ErrEst (..),
+    Solver (..),
+    Stepper (..),
+    solve,
+  )
+where
 
 import Control.Monad.Identity (Identity)
 import Control.Monad.RWS
@@ -12,6 +27,7 @@ import Data.Data (Proxy)
 import Data.Functor.Rep
 import Data.Kind (Type)
 import Debug.Trace (traceShow, traceShowId)
+import GHC.Generics (Generic)
 import Interpolate
 import Linear
 import Linear.Affine (Vector)
@@ -60,7 +76,7 @@ class (Solver sol de) => ErrEst sol de where
 
 class (Term ode, Solver solver ode) => Stepper stepper solver ode where
   adaptStep ::
-    (MonadState (stepper a) m, Ord a, (Metric (T ode), Floating a)) =>
+    (MonadState (stepper a) m, Ord a, (Metric (T ode), Floating a, Real a)) =>
     SolState solver ode a ->
     solver (T ode) a ->
     stepper a ->
@@ -72,38 +88,134 @@ class (Term ode, Solver solver ode) => Stepper stepper solver ode where
     -- | --- was candidate accepted?
     m (Either (a, a) (a, a))
 
-data ConstantStep a = ConstantStep {constantStepSize :: a}
+data ConstantStepper a = ConstantStepper
 
-instance (Solver solver de) => Stepper ConstantStep solver de where
-  -- passedDiscontinuity _ _ _ = False
-  adaptStep _ _ _ __ (t0, t1) = do
-    dt <- gets constantStepSize
-    return (Right (t1, t1 + dt))
+instance
+  (Solver solver de) =>
+  Stepper ConstantStepper solver de
+  where
+  adaptStep solState sol _ ode (t0, t1) = do
+    let h = t1 - t0
+    return $ Right (t1, t1 + h)
 
--- | I controller
-data SimpleAdaptStep a = SimpleAdaptStep
+data StepperPID a = StepperPID
+  { prevErr :: a,
+    prevPrevErr :: a,
+    beta_1 :: a,
+    beta_2 :: a,
+    beta_3 :: a
+  }
+  deriving (Generic)
+
+mkStepperPID :: Floating a => a -> a -> a -> StepperPID a
+mkStepperPID p i d =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = beta_1,
+      beta_2 = beta_3,
+      beta_3 = beta_3
+    }
+  where
+    beta_1 = p + i + d
+    beta_2 = -(p + 2 * d)
+    beta_3 = d
+
+mkStepperPI :: Floating a => a -> a -> StepperPID a
+mkStepperPI p i = mkStepperPID p i 0
+
+mkStepperI :: Floating a => a -> StepperPID a
+mkStepperI i = mkStepperPID 0 i 0
+
+defaultStepperPI :: Floating a => StepperPID a
+defaultStepperPI = mkStepperPI 0.2 1.0
 
 instance
   (Solver solver de, ErrEst solver de) =>
-  Stepper SimpleAdaptStep solver de
+  Stepper StepperPID solver de
   where
-  -- passedDiscontinuity _ _ _ = False
-
   adaptStep solState sol _ ode (t0, t1) = do
+    StepperPID {..} <- get
     let q = errorOrder ode sol
     let err = (errorEstimate ode sol solState)
-    let prop = max 0.25 . min 4 $ (t1 - t0) * (err) ^^ (-(q + 1))
-    let h' = 0.9 * prop * (t1 - t0)
-    return $
-      if err > 1
-        then Left (t0, t0 + h')
-        else Right (t1, t1 + h')
+    let prop = err ** beta_1 * prevErr ** beta_2 * prevPrevErr ** beta_3
+    -- limit step factor
+    let prop' = 1 + atan (prop - 1)
+    let h' = prop' * (t1 - t0)
+
+    if err > 1
+      then return $ Left (t0, t0 + h')
+      else do
+        assign #prevPrevErr prevErr
+        assign #prevErr err
+        return $ Right (t1, t1 + h')
+
+basicI :: Floating a => StepperPID a
+basicI =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = 1.0,
+      beta_2 = 0.0,
+      beta_3 = 0.0
+    }
+
+pi42 :: Floating a => StepperPID a
+pi42 =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = 0.6,
+      beta_2 = -0.2,
+      beta_3 = 0.0
+    }
+
+pi33 :: Floating a => StepperPID a
+pi33 =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = 2 / 3,
+      beta_2 = -1 / 3,
+      beta_3 = 0.0
+    }
+
+pi34 :: Floating a => StepperPID a
+pi34 =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = 0.7,
+      beta_2 = -0.4,
+      beta_3 = 0.0
+    }
+
+h211PI :: Floating a => StepperPID a
+h211PI =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = 1 / 6,
+      beta_2 = 1 / 6,
+      beta_3 = 0.0
+    }
+
+h312PID :: Floating a => StepperPID a
+h312PID =
+  StepperPID
+    { prevErr = 1,
+      prevPrevErr = 1,
+      beta_1 = 1 / 18,
+      beta_2 = 1 / 9,
+      beta_3 = 1 / 18
+    }
 
 solveStep ::
   forall solver ode stepper a.
   ( Solver solver ode,
     Stepper stepper solver ode,
     Floating a,
+    Real a,
     Ord a,
     Show a
   ) =>
@@ -148,7 +260,7 @@ iterateSol (t, x) step = do
 
 solve ::
   forall a v ode solver stepper.
-  (Solver solver ode, Stepper stepper solver ode, Floating a, Ord a, Show a) =>
+  (Solver solver ode, Stepper stepper solver ode, Real a, Floating a, Ord a, Show a) =>
   ode a ->
   solver (T ode) a ->
   stepper a ->
