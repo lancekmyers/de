@@ -64,7 +64,7 @@ library
     -- other-extensions:
 
     -- Other library packages from which modules are imported.
-    build-depends:    base ^>=4.16.1.0, 
+    build-depends:    base >=4.16, 
         linear,
         distributive,
         adjunctions, 
@@ -81,7 +81,6 @@ library
 test-suite de-test
     ghc-options: 
         -O3
-        -fllvm
         -flate-dmd-anal
         -fspecialize-aggressively
     -- Base language which the package is written in.
@@ -98,5 +97,5 @@ test-suite de-test
     other-modules: 
         Tester
     -- Test dependencies.
-    build-depends:    base ^>=4.16.1.0, 
+    build-depends:    base >=4.16.1.0, 
         tasty, linear, vector, de
