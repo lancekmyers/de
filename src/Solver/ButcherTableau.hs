@@ -5,22 +5,23 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Solver.ButcherTableau (BT (..), ERK (..), Tol (..), ERK_Params (..), dopri5, bosh3, tsit5) where
+module Solver.ButcherTableau (BT (..), Tol (..), dopri5, bosh3, tsit5) where
 
 import Control.Applicative (Const)
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State
 import Data.Data (Proxy)
+import Data.Machine (unfoldMealy)
 import Data.Maybe (fromJust)
 import Data.Vector (Vector)
-import qualified Data.Vector as V
+import Data.Vector qualified as V
 import GHC.Exts (IsList)
 import GHC.Generics (Generic)
 import Interpolate
 import Linear
 import Linear.V
 import Optics
-import Solver.Class (ErrEst (..), Solver (..))
+import Solver.Class (ErrorEstimate (..), StepIntegrator, TimeStep (..))
 import Term
 
 -- | Weighted sum of vector s
@@ -53,10 +54,42 @@ butcherTableau coeffs ode y0 t0 h = foldl go [] coeffs
         v = vf ode t y
         u = control ode (t0, t0 + h)
 
--- k = prod ode v u
-
 -- | Explicit Runge Kutta
 data ERK v a = ERK {bt :: BT a, interpCoeff :: IC a}
+
+erk :: forall ode a. (Floating a, Ord a, Term ode) => BT a -> IC a -> Tol a -> ode a -> StepIntegrator (T ode) a
+erk BT {..} ics Tol {..} = \ode -> unfoldMealy (go ode) ()
+  where
+    q = length f1
+    go ode _ (y0, tst) = ((interp, err), ())
+      where
+        TimeStep {t = t0, delta = h} = tst
+        t1 = t0 + h
+        ks = butcherTableau coeffs ode y0 t0 h
+        u = control ode (t0, t1) -- is this the right thing??
+        y1 = y0 ^+^ prod ode (wsum f1 ks) u
+
+        -- for error estimation
+        y1' = y0 ^+^ prod ode (wsum f2 ks) u
+        yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
+        diff = y1 ^-^ y1'
+        tol = (rTol *^ yy) <&> (+ aTol)
+        err = ErrorEstimate (norm $ liftI2 (/) diff tol) q
+
+        interp = case ics of
+          InterpLinear -> mkLin ode (t0, t1) y0 y1
+          PlainH3 -> mkH3 ode (t0, t1) y0 (V.head ks) y1 (V.last ks)
+          MidPointH4 ics ->
+            let ymid =
+                  y0
+                    ^+^ prod
+                      ode
+                      (wsum ics ks)
+                      u
+             in mkH4 ode (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
+          InterpMatrix mat ->
+            let coeffs = ((flip (prod ode) u) . (flip wsum ks) <$> mat) `V.snoc` y0
+             in Poly (t0, t1) coeffs
 
 -- | Iterpolation Coefficients
 data IC a
@@ -67,55 +100,49 @@ data IC a
     MidPointH4 (V.Vector a)
   | InterpMatrix (V.Vector (V.Vector a))
 
-data ERK_State v a = ERK_State {errEst :: a}
-  deriving (Generic)
-
-data ERK_Params v a = ERK_Params
-  {tol :: Tol a}
-  deriving (Generic)
-
-data RKF45 v a = RKF45 (v a) (v a) -- Error estimate
+-- data ERK_State v a = ERK_State {errEst :: a}
+--   deriving (Generic)
 
 data Tol a = Tol {aTol :: a, rTol :: a}
 
-instance (Term ode) => Solver ERK ode where
-  type SolState ERK ode = ERK_State (T ode)
-  type SolParams ERK ode = ERK_Params (T ode)
+-- instance (Term ode) => Solver ERK ode where
+--   type SolState ERK ode = ERK_State (T ode)
+--   type SolParams ERK ode = ERK_Params (T ode)
 
-  initSolver _ _ _ _ _ = ERK_State 0
-  step (ERK (BT {..}) ics) ode y0 (t0, t1) = do
-    Tol {..} <- view #tol <$> ask
+--   initSolver _ _ _ _ _ = ERK_State 0
+--   step (ERK (BT {..}) ics) ode y0 (t0, t1) = do
+--     Tol {..} <- view #tol <$> ask
 
-    let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
-    let u = control ode (t0, t1) -- is this the right thing??
-    let y1 = y0 ^+^ prod ode (wsum f1 ks) u
+--     let ks = butcherTableau coeffs ode y0 t0 (t1 - t0)
+--     let u = control ode (t0, t1) -- is this the right thing??
+--     let y1 = y0 ^+^ prod ode (wsum f1 ks) u
 
-    -- for error estimation
-    let y1' = y0 ^+^ prod ode (wsum f2 ks) u
-    let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
-    let diff = y1 ^-^ y1'
-    let tol = (rTol *^ yy) <&> (+ aTol)
-    let err = norm $ liftI2 (/) diff tol
-    assign #errEst err
+--     -- for error estimation
+--     let y1' = y0 ^+^ prod ode (wsum f2 ks) u
+--     let yy = liftI2 (\y y' -> max (abs y) (abs y')) y1 y1'
+--     let diff = y1 ^-^ y1'
+--     let tol = (rTol *^ yy) <&> (+ aTol)
+--     let err = norm $ liftI2 (/) diff tol
+--     assign #errEst err
 
-    return $ case ics of
-      InterpLinear -> mkLin ode (t0, t1) y0 y1
-      PlainH3 -> mkH3 ode (t0, t1) y0 (V.head ks) y1 (V.last ks)
-      MidPointH4 ics ->
-        let ymid =
-              y0
-                ^+^ prod
-                  ode
-                  (wsum ics ks)
-                  u
-         in mkH4 ode (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
-      InterpMatrix mat ->
-        let coeffs = ((flip (prod ode) u) . (flip wsum ks) <$> mat) `V.snoc` y0
-         in Poly (t0, t1) coeffs
+--     return $ case ics of
+--       InterpLinear -> mkLin ode (t0, t1) y0 y1
+--       PlainH3 -> mkH3 ode (t0, t1) y0 (V.head ks) y1 (V.last ks)
+--       MidPointH4 ics ->
+--         let ymid =
+--               y0
+--                 ^+^ prod
+--                   ode
+--                   (wsum ics ks)
+--                   u
+--          in mkH4 ode (t0, t1) ymid y0 y1 (V.head ks) (V.last ks)
+--       InterpMatrix mat ->
+--         let coeffs = ((flip (prod ode) u) . (flip wsum ks) <$> mat) `V.snoc` y0
+--          in Poly (t0, t1) coeffs
 
-instance Term ode => ErrEst ERK ode where
-  errorEstimate _ _ (ERK_State errEst) = errEst
-  errorOrder de (ERK {bt}) = length $ f1 bt
+-- instance (Term ode) => ErrEst ERK ode where
+--   errorEstimate _ _ (ERK_State errEst) = errEst
+--   errorOrder de (ERK {bt}) = length $ f1 bt
 
 --------
 
@@ -138,7 +165,7 @@ rkf45_bt =
         ]
     }
 
-dopri_bt :: Floating a => BT a
+dopri_bt :: (Floating a) => BT a
 dopri_bt =
   BT
     { f1 =
@@ -158,7 +185,7 @@ dopri_bt =
         ]
     }
 
-dopri5_interp :: Floating a => Vector a
+dopri5_interp :: (Floating a) => Vector a
 dopri5_interp =
   V.fromList
     [ 6025192743 / 30085553152 / 2,
@@ -170,11 +197,10 @@ dopri5_interp =
       11237099 / 235043384 / 2
     ]
 
-{-# SPECIALIZE dopri5 :: ERK v Double #-}
-dopri5 :: Floating a => ERK v a
-dopri5 = ERK {bt = dopri_bt, interpCoeff = MidPointH4 dopri5_interp}
+dopri5 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+dopri5 = erk dopri_bt (MidPointH4 dopri5_interp)
 
-bosh3_bt :: Floating a => BT a
+bosh3_bt :: (Floating a) => BT a
 bosh3_bt =
   BT
     { coeffs =
@@ -187,14 +213,14 @@ bosh3_bt =
     }
 
 -- | Bogacki--Shampine's 3/2 method aka Ralston's third order
-bosh3 :: Floating a => ERK v a
-bosh3 = ERK bosh3_bt PlainH3
+bosh3 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+bosh3 = erk bosh3_bt PlainH3
 
 -- from page 6 of "Runge–Kutta pairs of orders 5(4) satisfying only the first column simplifying assumption"
 -- http://users.uoa.gr/~tsitourasc/RK54_new_v2.pdf
 -- massaged into this form using sage
 -- https://sagecell.sagemath.org/?z=eJyNk91q20AQhe8DeQfhK8mNl_n_uehNXqOUUjsOBENdXCXP31EaLCWOoYKBkXT27Ddn2bH72r38PPWrcTXc3myxXvvbm27xbLCBMkRIulMCob0XrLvx44d-7DYdNqbMSMBIVxSk4VK3XtOrVNgEKFTQ0Vhxcu2-dNAcOQMt0cGFIN88JlgqWGgI6JN6cpodqWGaqQVzUJGrvDlio5QMJQVnF2OcrHiauxZJgpEXhymSkidfzFr-18agxqGsJipOYGjq513VA1gsCAKSJGwRxkQgnyVvTSWwcolaUmyFdiVqqtwo63-qMpf4k6xLCK2oCAQMuIAAIi-E7yec2PSSTbyxp1KlTIFZRVfRgKHgINiJjWrnq2waUMklWaUoXif3H3BWcBuWFg6VdxhKHTyky4JgWOzx8fHhbLv18qKm55XLdbPsMN2Z_W48nvpvr3fngKvh7t81OtDc8tzK3Orc2tz6avhe09wvrLd4122piqukSqusyidlYbSH4_jj9-n48Lwb-_uh7Y77x8en3dP-1_inH4e_pHe6_w==&lang=sage&interacts=eJyLjgUAARUAuQ==
-tsit5_interp :: Floating a => Vector (Vector a)
+tsit5_interp :: (Floating a) => Vector (Vector a)
 tsit5_interp =
   [ [ -1.053088497729022,
       0.101700000000000,
@@ -225,7 +251,7 @@ tsit5_interp =
   ]
 
 -- https://github.com/patrick-kidger/diffrax/blob/9126ce0c7656951945a8b779722e19b7ebddca33/diffrax/solver/tsit5.py#L38C14-L38C14
-tsit5_bt :: Floating a => BT a
+tsit5_bt :: (Floating a) => BT a
 tsit5_bt =
   BT
     { coeffs =
@@ -297,5 +323,5 @@ tsit5_bt =
         -1 / 66
       ]
 
-tsit5 :: ERK v Double
-tsit5 = ERK tsit5_bt (InterpMatrix tsit5_interp)
+tsit5 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+tsit5 = erk tsit5_bt (InterpMatrix tsit5_interp)
