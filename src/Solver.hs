@@ -8,25 +8,24 @@ module Solver (module BTab, module Euler, module C) where
 
 import Solver.ButcherTableau as BTab
   ( BT (..),
-    ERK (..),
-    ERK_Params (..),
     Tol (..),
     bosh3,
     dopri5,
     tsit5,
   )
 import Solver.Class as C
-  ( ConstantStepper (..),
-    ErrEst (..),
-    Solver (..),
-    Stepper (..),
-    StepperPID (..),
+  ( ErrorEstimate (..),
+    TimeStep (..),
     basicI,
+    constantStepper,
     h211PI,
     h312PID,
     pi33,
     pi34,
     pi42,
-    solve,
+    runIntegration,
+    solvingMachine,
+    type StepController,
+    type StepIntegrator,
   )
 import Solver.Euler as Euler

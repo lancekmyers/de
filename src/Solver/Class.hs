@@ -10,6 +10,7 @@ module Solver.Class
     pi34,
     h211PI,
     h312PID,
+    constantStepper,
     type StepController,
     type StepIntegrator,
     ErrorEstimate (..),
@@ -28,7 +29,7 @@ import Control.Monad.State
 import Data.Data (Proxy)
 import Data.Functor.Rep
 import Data.Kind (Type)
-import Data.Machine (Is, Machine, Plan, PlanT, auto, await, construct, run, source, yield)
+import Data.Machine (Is, Machine, Plan, PlanT, auto, await, construct, run, source, taking, yield)
 import Data.Machine.Mealy (Mealy (..), unfoldMealy)
 import Data.Machine.Process (Process, takingWhile, (~>))
 import Debug.Trace (traceShow, traceShowId)
@@ -37,6 +38,7 @@ import Interpolate
 import Linear
 import Optics hiding (Is)
 import Term
+import Prelude hiding ((.))
 
 runIntegration ::
   forall a v solver stepper.
@@ -62,13 +64,13 @@ buildStep sol stp = fmap sequence $ (sol &&& arr snd) >>> lAssoc >>> second stp
 
 solvingMachine ::
   forall a v k.
-  (Num a, Additive v) =>
+  (Show a, Num a, Additive v) =>
   StepIntegrator v a ->
   StepController a ->
   Machine (Is (v a, TimeStep a)) (Interp v a) -- Plan (Is (v a, TimeStep a)) (Interp v a) ()
 solvingMachine sol stp = construct $ await >>= loop mealy
   where
-    lAssoc = arr $ \((int, err), tst) -> (int, (err, tst))
+    lAssoc = arr $ \((int, err), tst) -> (int, (traceShow err err, tst))
     -- integrate step, then check error and reject/accept with new step
     mealy = (sol &&& arr snd) >>> lAssoc >>> second stp >>> arr sequence
     loop ::
@@ -78,12 +80,12 @@ solvingMachine sol stp = construct $ await >>= loop mealy
       (v a, TimeStep a) ->
       PlanT (Is (v a, TimeStep a)) (Interp v a) m ()
     loop mealy (y0, h) = do
-      let (ret, mealy) = runMealy mealy (y0, h)
-      case ret of
+      let (ret, mealy') = runMealy mealy (y0, h)
+      case traceShow h ret of
         -- accepted
-        Right (interp, h') -> yield interp >> loop mealy (rightMost interp, h')
+        Right (interp, h') -> yield interp >> loop mealy' (rightMost interp, traceShow "accept" h')
         -- rejected
-        Left h' -> loop mealy (y0, h')
+        Left h' -> loop mealy' (y0, traceShow "reject" h')
 
 interpTimeStep :: (Num a) => Interp v a -> TimeStep a
 interpTimeStep (Poly (t0, t1) _) = TimeStep {t = t0, delta = t1 - t0}
@@ -91,8 +93,10 @@ interpTimeStep (Poly (t0, t1) _) = TimeStep {t = t0, delta = t1 - t0}
 type StepIntegrator v a = Mealy (v a, TimeStep a) (Interp v a, ErrorEstimate a)
 
 data ErrorEstimate a = ErrorEstimate a Int
+  deriving (Show)
 
 data TimeStep a = TimeStep {t :: a, delta :: a}
+  deriving (Show)
 
 type StepController a = Mealy (ErrorEstimate a, TimeStep a) (Either (TimeStep a) (TimeStep a))
 
@@ -107,6 +111,7 @@ constantStepper = unfoldMealy go ()
 data StepperPID a = StepperPID
   { prevErr :: a,
     prevPrevErr :: a,
+    rejections :: Int,
     beta_1 :: a,
     beta_2 :: a,
     beta_3 :: a
@@ -119,6 +124,7 @@ mkStepperPID p i d =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = beta_1,
         beta_2 = beta_3,
         beta_3 = beta_3
@@ -141,17 +147,20 @@ pidStepController :: forall a. (Ord a, Floating a) => StepperPID a -> StepContro
 pidStepController pid = unfoldMealy go pid
   where
     go :: StepperPID a -> (ErrorEstimate a, TimeStep a) -> (Either (TimeStep a) (TimeStep a), StepperPID a)
-    go pid@StepperPID {..} (ErrorEstimate err q, TimeStep {..}) =
-      let prop = err ** beta_1 * prevErr ** beta_2 * prevPrevErr ** beta_3
-          -- limit step factor
-          prop' = 1 + atan (prop - 1)
-          delta' = prop' * delta
-       in if err > 1
-            then (Left (TimeStep {t = t, delta = delta'}), pid)
-            else
-              ( Right (TimeStep {t = t + delta, delta = delta'}),
-                pid {prevPrevErr = prevErr, prevErr = err}
-              )
+    go pid@StepperPID {..} (ErrorEstimate err _, TimeStep {..})
+      | rejections > 5 = error "too many rejections"
+      -- \| err < 1e-4 = error "error is too small"
+      | err > 1 = (Left (TimeStep {t = t, delta = delta'}), pid {rejections = rejections + 1})
+      | otherwise =
+          ( Right (TimeStep {t = t + delta, delta = delta'}),
+            pid {rejections = 0, prevPrevErr = prevErr, prevErr = 1e-2 + err}
+          )
+      where
+        prop = ((err) ** beta_1) * (prevErr ** beta_2)
+        -- \* (prevPrevErr ** beta_3)
+        -- limit step factor
+        prop' = min 2 . max 0.5 $ 1 / prop
+        delta' = prop' * delta
 
 basicI :: (Floating a, Ord a) => StepController a
 basicI =
@@ -159,6 +168,7 @@ basicI =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = 1.0,
         beta_2 = 0.0,
         beta_3 = 0.0
@@ -170,6 +180,7 @@ pi42 =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = 0.6,
         beta_2 = -0.2,
         beta_3 = 0.0
@@ -181,6 +192,7 @@ pi33 =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = 2 / 3,
         beta_2 = -1 / 3,
         beta_3 = 0.0
@@ -192,6 +204,7 @@ pi34 =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = 0.7,
         beta_2 = -0.4,
         beta_3 = 0.0
@@ -203,6 +216,7 @@ h211PI =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = 1 / 6,
         beta_2 = 1 / 6,
         beta_3 = 0.0
@@ -214,6 +228,7 @@ h312PID =
     StepperPID
       { prevErr = 1,
         prevPrevErr = 1,
+        rejections = 0,
         beta_1 = 1 / 18,
         beta_2 = 1 / 9,
         beta_3 = 1 / 18

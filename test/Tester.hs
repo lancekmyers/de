@@ -2,7 +2,7 @@
 
 module Tester where
 
-import qualified Data.Vector as V
+import Data.Vector qualified as V
 import Interpolate
 import Linear
 import Solver
@@ -29,18 +29,16 @@ data IVP de a = IVP
 data Reference de a where
   Exact :: (a -> T de a) -> Reference de a
   Numerical ::
-    forall sol stepper de a.
-    (Solver sol de, Stepper stepper sol de) =>
-    sol (T de) a ->
-    stepper a ->
-    SolParams sol de a ->
+    (Term de) =>
+    StepIntegrator (T de) a ->
+    StepController a ->
     Reference de a
 
 data DETest where
   Compare ::
     forall de a.
     (Floating a, Show a, Ord a, Term de) =>
-    [de a -> (a, a) -> T de a -> Interp de a] ->
+    [de a -> (a, a) -> T de a -> Interp (T de) a] ->
     IVP de a ->
     -- | Tolerance
     a ->
@@ -51,15 +49,12 @@ data DETest where
       Real a,
       Show a,
       Ord a,
-      Solver sol ode,
-      Stepper stepper sol ode,
+      Term ode,
       Metric (T ode)
     ) =>
     -- | Solver to test
-    sol (T ode) a ->
-    -- | Parameters used by solver in test
-    SolParams sol ode a ->
-    stepper a ->
+    (ode a -> StepIntegrator (T ode) a) ->
+    StepController a ->
     IVP ode a ->
     -- | Tolerance
     a ->
@@ -81,9 +76,9 @@ instance IsTest DETest where
       if max_err >= tol
         then testFailed ("unacceptable error " ++ show max_err)
         else testPassed ""
-  run _ (DETest sol solParams st ivp tol) _ = do
+  run _ (DETest stepInt timeCont ivp tol) _ = do
     let IVP de exact (t0, t1) ts y0 = ivp
-    let interps = solve de sol st solParams y0 (t0, t1)
+    let interps = runIntegration (stepInt de) timeCont (y0, TimeStep {t = t0, delta = (t1 - t0)}) (last ts)
     let exacts = exact <$> ts
     let ys = evalSol de ts interps
     let max_err = maximum . fmap norm $ zipWith (^-^) ys exacts
