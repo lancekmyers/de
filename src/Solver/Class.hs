@@ -50,7 +50,7 @@ runIntegration ::
   [Interp v a]
 runIntegration stepIntegrator stepController (y0, t0) tf =
   run $
-    source [(y0, t0)] ~> solveMach ~> takingWhile (\(Poly (_t0, t1) _) -> tf > t1)
+    source [(y0, t0)] ~> solveMach ~> takingWhile (\(Poly (_t0, t1) _) -> tf >= t1)
   where
     solveMach = solvingMachine stepIntegrator stepController
 

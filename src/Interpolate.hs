@@ -83,7 +83,7 @@ mkH3 de (t0, t1) y0 f0 y1 f1 = Poly (t0, t1) coeffs
     coeffs =
       V.fromList
         [ 2 *^ y0 ^+^ v0 ^-^ 2 *^ y1 ^+^ v1,
-          (-3) *^ y0 ^-^ 2 *^ v0 ^+^ 4 *^ y1 ^-^ v1,
+          (-3) *^ y0 ^-^ 2 *^ v0 ^+^ 3 *^ y1 ^-^ v1,
           v0,
           y0
         ]

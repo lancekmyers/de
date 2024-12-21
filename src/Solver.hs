@@ -12,6 +12,7 @@ import Solver.ButcherTableau as BTab
     bosh3,
     dopri5,
     tsit5,
+    rkf45
   )
 import Solver.Class as C
   ( ErrorEstimate (..),

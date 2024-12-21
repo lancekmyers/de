@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Solver.ButcherTableau (BT (..), Tol (..), dopri5, bosh3, tsit5) where
+module Solver.ButcherTableau (BT (..), Tol (..), dopri5, bosh3, tsit5, rkf45) where
 
 import Control.Applicative (Const)
 import Control.Monad.Reader (MonadReader (..))
@@ -149,10 +149,10 @@ data Tol a = Tol {aTol :: a, rTol :: a}
 rkf45_bt :: (Floating a) => BT a
 rkf45_bt =
   BT
-    { f1 =
+    { f2 =
         -- fromJust . fromVector $
         [25 / 216, 0, 1408 / 2565, 2197 / 4104, -1 / 5, 0],
-      f2 =
+      f1 =
         -- fromJust . fromVector $
         [16 / 135, 0, 6656 / 12825, 28561 / 56430, -9 / 50, 2 / 55],
       coeffs =
@@ -164,6 +164,10 @@ rkf45_bt =
           (0.5, [-8 / 27, 2, -3544 / 2565, 1859 / 4104, -11 / 40])
         ]
     }
+
+rkf45 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+rkf45 = erk rkf45_bt PlainH3
+
 
 dopri_bt :: (Floating a) => BT a
 dopri_bt =
@@ -209,7 +213,7 @@ bosh3_bt =
           (1.0, [2 / 9, 1 / 3, 4 / 9])
         ],
       f1 = [2 / 9, 1 / 3, 4 / 9, 0.0],
-      f2 = [7 / 24, 1 / 4, 1 / 3, -1 / 8]
+      f2 = [7 / 24, 1 / 4, 1 / 3, 1 / 8]
     }
 
 -- | Bogacki--Shampine's 3/2 method aka Ralston's third order
