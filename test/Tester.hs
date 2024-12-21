@@ -82,8 +82,9 @@ instance IsTest DETest where
     let exacts = exact <$> ts
     let ys = evalSol de ts interps
     let max_err = maximum . fmap norm $ zipWith (^-^) ys exacts
+    let last_err = norm $ last ys ^-^ last exacts
     return $
       if max_err / tol >= 1
-        then testFailed ("unacceptable error " ++ show max_err)
+        then testFailed ("unacceptable error " ++ show max_err ++ " | " ++ show last_err)
         else testPassed ""
   testOptions = pure []

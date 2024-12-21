@@ -29,12 +29,12 @@ testEuler ivp = DETest euler constantStepper ivp 1e-1
 
 -- testHeun ivp = DETest heun (Const ()) ConstantStepper ivp 1e-2
 
-testDopri :: (Floating a, Real a, Show a, Ord a, Term ode) => IVP ode a -> DETest
+testDopri :: (Term ode) => IVP ode Double -> DETest
 testDopri ivp = DETest (dopri5 (Tol 1e-4 1e-6)) pi33 ivp 1e-3
 
 testDopriAdapt ivp =
   DETest
-    (dopri5 (Tol 1e-4 1e-6))
+    (dopri5 (Tol 1e-5 1e-7))
     basicI
     ivp
     1e-5
@@ -43,28 +43,35 @@ testTsitAdapt :: (Term ode) => IVP ode Double -> DETest
 testTsitAdapt ivp =
   DETest
     (tsit5 (Tol {rTol = 1e-3, aTol = 1e-6}))
+    pi42
+    ivp
+    1e-3
+
+-- testBoshAdapt :: (Term ode) => IVP ode Double -> DETest
+testBoshAdapt ivp =
+  DETest
+    (bosh3 (Tol 1e-2 1e-4))
     basicI
     ivp
     1e-3
 
-testBoshAdapt :: (Term ode) => IVP ode Double -> DETest
-testBoshAdapt ivp =
-  DETest
-    (bosh3 (Tol 1e-5 1e-7))
+testRKFAdapt ivp =
+    DETest
+    (rkf45 (Tol 1e-4 1e-6))
     basicI
     ivp
-    1e-2
+    5e-2
 
 testIVP :: (Term ode) => String -> IVP ode Double -> TestTree
 testIVP name ivp =
   testGroup
     name
-    [ -- singleTest "euler" $ testEuler ivp,
-      singleTest "dopri5-fixed" $ testDopri ivp,
+    [ singleTest "dopri5-fixed" $ testDopri ivp,
       singleTest "dopri5-adapt" $ testDopriAdapt ivp,
-      -- -- bosh3 has borked error estimate
-      singleTest "bosh3-adapt" $ testBoshAdapt ivp
-      -- singleTest "tsit5-adapt" $ testTsitAdapt ivp
+      -- bosh3 has borked error estimate
+      singleTest "bosh3-adapt" $ testBoshAdapt ivp,
+      singleTest "rkf45-adapt" $ testRKFAdapt ivp,
+      singleTest "tsit5-adapt" $ testTsitAdapt ivp
     ]
 
 main :: IO ()

@@ -70,7 +70,7 @@ solvingMachine ::
   Machine (Is (v a, TimeStep a)) (Interp v a) -- Plan (Is (v a, TimeStep a)) (Interp v a) ()
 solvingMachine sol stp = construct $ await >>= loop mealy
   where
-    lAssoc = arr $ \((int, err), tst) -> (int, (traceShow err err, tst))
+    lAssoc = arr $ \((int, err), tst) -> (int, (err, tst))
     -- integrate step, then check error and reject/accept with new step
     mealy = (sol &&& arr snd) >>> lAssoc >>> second stp >>> arr sequence
     loop ::
@@ -81,11 +81,11 @@ solvingMachine sol stp = construct $ await >>= loop mealy
       PlanT (Is (v a, TimeStep a)) (Interp v a) m ()
     loop mealy (y0, h) = do
       let (ret, mealy') = runMealy mealy (y0, h)
-      case traceShow h ret of
+      case ret of
         -- accepted
-        Right (interp, h') -> yield interp >> loop mealy' (rightMost interp, traceShow "accept" h')
+        Right (interp, h') -> yield interp >> loop mealy' (rightMost interp, h')
         -- rejected
-        Left h' -> loop mealy' (y0, traceShow "reject" h')
+        Left h' -> loop mealy' (y0, h')
 
 interpTimeStep :: (Num a) => Interp v a -> TimeStep a
 interpTimeStep (Poly (t0, t1) _) = TimeStep {t = t0, delta = t1 - t0}

@@ -15,9 +15,11 @@ import qualified Data.Vector as V
 import Linear
 import Optics (prism')
 import Term
+import Debug.Trace (traceShow)
 
 data Interp v a
   = Poly (a, a) (Vector (v a))
+  deriving Show
 
 interp ::
   forall de a.
@@ -113,15 +115,15 @@ type Solution de a = [Interp (T de) a]
 -- | Evaluate solution at a list of times
 -- requires times to be in ascending order
 evalSol ::
-  (Term de, Floating a, Ord a) =>
+  (Term de, Show a, Floating a, Ord a) =>
   de a ->
   [a] ->
   Solution de a ->
   [T de a]
 evalSol de [] _ = []
-evalSol de _ [] = []
+evalSol de rest@(t:_) [] = error $ "not enough intervals " ++ show t ++ " " ++ show (length rest)
 evalSol de (t : ts) (i : is)
-  | contains i t = interp de t i : evalSol de ts is
+  | contains i t = (interp de t i) : evalSol de ts (i : is)
   | otherwise = evalSol de (t : ts) is
 
 knots :: (Num a, Additive v) => [Interp v a] -> [(a, v a)]
