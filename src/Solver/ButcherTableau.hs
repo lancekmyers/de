@@ -8,10 +8,14 @@
 module Solver.ButcherTableau (BT (..), Tol (..), dopri5, bosh3, tsit5, rkf45) where
 
 import Control.Applicative (Const)
+import Control.Monad.Except (Except)
+import Control.Monad.Identity (Identity)
 import Control.Monad.Reader (MonadReader (..))
 import Control.Monad.State
+import Control.Monad.Writer.Lazy (WriterT)
 import Data.Data (Proxy)
-import Data.Machine (unfoldMealy)
+import Data.Machine (Automaton (..), AutomatonM (autoT), unfoldMealy)
+import Data.Machine.MealyT (arrM, arrPure, scanMealyT, upgrade)
 import Data.Maybe (fromJust)
 import Data.Vector (Vector)
 import Data.Vector qualified as V
@@ -21,7 +25,7 @@ import Interpolate
 import Linear
 import Linear.V
 import Optics
-import Solver.Class (ErrorEstimate (..), StepIntegrator, TimeStep (..))
+import Solver.Class (ErrorEstimate (..), Solver, SolverInfo, TimeStep (..))
 import Term
 
 -- | Weighted sum of vector s
@@ -57,11 +61,11 @@ butcherTableau coeffs ode y0 t0 h = foldl go [] coeffs
 -- | Explicit Runge Kutta
 data ERK v a = ERK {bt :: BT a, interpCoeff :: IC a}
 
-erk :: forall ode a. (Floating a, Ord a, Term ode) => BT a -> IC a -> Tol a -> ode a -> StepIntegrator (T ode) a
-erk BT {..} ics Tol {..} = \ode -> unfoldMealy (go ode) ()
+erk :: forall ode a. (Floating a, Ord a, Term ode) => BT a -> IC a -> Tol a -> ode a -> Solver (ErrorEstimate a) Identity (T ode) a
+erk BT {..} ics Tol {..} ode = autoT $ arrM go
   where
     q = length f1
-    go ode _ (y0, tst) = ((interp, err), ())
+    go (y0, tst) = pure @(WriterT SolverInfo (Except _)) (err, interp)
       where
         TimeStep {t = t0, delta = h} = tst
         t1 = t0 + h
@@ -165,9 +169,8 @@ rkf45_bt =
         ]
     }
 
-rkf45 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+rkf45 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> Solver (ErrorEstimate a) Identity (T ode) a
 rkf45 = erk rkf45_bt PlainH3
-
 
 dopri_bt :: (Floating a) => BT a
 dopri_bt =
@@ -201,7 +204,7 @@ dopri5_interp =
       11237099 / 235043384 / 2
     ]
 
-dopri5 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+dopri5 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> Solver (ErrorEstimate a) Identity (T ode) a
 dopri5 = erk dopri_bt (MidPointH4 dopri5_interp)
 
 bosh3_bt :: (Floating a) => BT a
@@ -217,7 +220,7 @@ bosh3_bt =
     }
 
 -- | Bogacki--Shampine's 3/2 method aka Ralston's third order
-bosh3 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+bosh3 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> Solver (ErrorEstimate a) Identity (T ode) a
 bosh3 = erk bosh3_bt PlainH3
 
 -- from page 6 of "Runge–Kutta pairs of orders 5(4) satisfying only the first column simplifying assumption"
@@ -327,5 +330,5 @@ tsit5_bt =
         -1 / 66
       ]
 
-tsit5 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> StepIntegrator (T ode) a
+tsit5 :: (Ord a, Floating a, Term ode) => Tol a -> ode a -> Solver (ErrorEstimate a) Identity (T ode) a
 tsit5 = erk tsit5_bt (InterpMatrix tsit5_interp)

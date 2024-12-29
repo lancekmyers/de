@@ -25,41 +25,41 @@ expIVP =
     [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     (V1 1)
 
-testEuler ivp = DETest euler constantStepper ivp 1e-1
+testEuler ivp = DETest euler ivp 5e-2 1e-1
 
 -- testHeun ivp = DETest heun (Const ()) ConstantStepper ivp 1e-2
 
 testDopri :: (Term ode) => IVP ode Double -> DETest
-testDopri ivp = DETest (dopri5 (Tol 1e-4 1e-6)) pi33 ivp 1e-3
+testDopri ivp = DETest (controlledStep pi33 . dopri5 (Tol 1e-4 1e-6)) ivp 1e-1 1e-3
 
 testDopriAdapt ivp =
   DETest
-    (dopri5 (Tol 1e-5 1e-7))
-    basicI
+    (controlledStep basicI . dopri5 (Tol 1e-5 1e-7))
     ivp
+    1e-1
     1e-5
 
 testTsitAdapt :: (Term ode) => IVP ode Double -> DETest
 testTsitAdapt ivp =
   DETest
-    (tsit5 (Tol {rTol = 1e-3, aTol = 1e-6}))
-    pi42
+    (controlledStep pi42 . tsit5 (Tol {rTol = 1e-3, aTol = 1e-6}))
     ivp
+    1e-1
     1e-3
 
 -- testBoshAdapt :: (Term ode) => IVP ode Double -> DETest
 testBoshAdapt ivp =
   DETest
-    (bosh3 (Tol 1e-2 1e-4))
-    basicI
+    (controlledStep basicI . bosh3 (Tol 1e-2 1e-4))
     ivp
+    1e-1
     1e-3
 
 testRKFAdapt ivp =
-    DETest
-    (rkf45 (Tol 1e-4 1e-6))
-    basicI
+  DETest
+    (controlledStep basicI . rkf45 (Tol 1e-4 1e-6))
     ivp
+    1e-1
     5e-2
 
 testIVP :: (Term ode) => String -> IVP ode Double -> TestTree

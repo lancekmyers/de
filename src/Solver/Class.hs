@@ -13,8 +13,11 @@ module Solver.Class
     h211PI,
     h312PID,
     constantStepper,
+    controlledStep,
     type StepController,
     type Solver,
+    SolverInfo (..),
+    SolverErr (..),
     ErrorEstimate (..),
     TimeStep (..),
     runIntegration,
@@ -28,7 +31,7 @@ import Control.Monad.Identity (Identity)
 import Control.Monad.RWS
 import Control.Monad.Reader (ReaderT)
 import Control.Monad.State
-import Control.Monad.Writer.CPS (WriterT)
+import Control.Monad.Writer.Lazy (WriterT)
 import Data.Data (Proxy)
 import Data.Functor.Compose (Compose (..))
 import Data.Functor.Rep
@@ -62,16 +65,16 @@ runIntegration solver (y0, t0) h tf =
 controlledStep ::
   forall a v.
   (Show a, Num a, Additive v) =>
-  Solver (ErrorEstimate a) Identity v a ->
   StepController Identity a ->
+  Solver (ErrorEstimate a) Identity v a ->
   Solver () Identity v a
-controlledStep sol stp = undefined
+controlledStep stp sol = construct (await >>= go sol stp)
   where
     go ::
       Solver (ErrorEstimate a) Identity v a ->
       StepController Identity a ->
       (v a, TimeStep a) ->
-      PlanT (Is (v a, TimeStep a)) (Interp v a) (WriterT SolverInfo (Except SolverErr)) ()
+      PlanT (Is (v a, TimeStep a)) ((), Interp v a) (WriterT SolverInfo (Except SolverErr)) ()
     go sol stpMeal (y0, t) = do
       ((err, interp), sol') <- lift (runMachineT (supply [(y0, t)] sol)) >>= (\(Yield x k) -> pure (x, k))
 
@@ -79,7 +82,7 @@ controlledStep sol stp = undefined
 
       case t' of
         Left t' -> go sol' stpMeal' (y0, t')
-        Right t' -> yield interp
+        Right t' -> yield ((), interp)
 
 interpTimeStep :: (Num a) => Interp v a -> TimeStep a
 interpTimeStep (Poly (t0, t1) _) = TimeStep {t = t0, delta = t1 - t0}

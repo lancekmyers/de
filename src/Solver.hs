@@ -11,22 +11,24 @@ import Solver.ButcherTableau as BTab
     Tol (..),
     bosh3,
     dopri5,
+    rkf45,
     tsit5,
-    rkf45
   )
 import Solver.Class as C
   ( ErrorEstimate (..),
+    SolverErr (..),
+    SolverInfo (..),
     TimeStep (..),
     basicI,
     constantStepper,
+    controlledStep,
     h211PI,
     h312PID,
     pi33,
     pi34,
     pi42,
     runIntegration,
-    solvingMachine,
+    type Solver,
     type StepController,
-    type StepIntegrator,
   )
 import Solver.Euler as Euler

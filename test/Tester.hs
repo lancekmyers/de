@@ -2,6 +2,9 @@
 
 module Tester where
 
+import Control.Monad.Except (runExcept)
+import Control.Monad.Identity (Identity)
+import Control.Monad.Writer.Lazy (runWriterT)
 import Data.Vector qualified as V
 import Interpolate
 import Linear
@@ -30,21 +33,12 @@ data Reference de a where
   Exact :: (a -> T de a) -> Reference de a
   Numerical ::
     (Term de) =>
-    StepIntegrator (T de) a ->
-    StepController a ->
+    Solver () Identity (T de) a ->
     Reference de a
 
 data DETest where
-  Compare ::
-    forall de a.
-    (Floating a, Show a, Ord a, Term de) =>
-    [de a -> (a, a) -> T de a -> Interp (T de) a] ->
-    IVP de a ->
-    -- | Tolerance
-    a ->
-    DETest
   DETest ::
-    forall sol stepper ode a.
+    forall sol stepper ode a i.
     ( Floating a,
       Real a,
       Show a,
@@ -53,9 +47,10 @@ data DETest where
       Metric (T ode)
     ) =>
     -- | Solver to test
-    (ode a -> StepIntegrator (T ode) a) ->
-    StepController a ->
+    (ode a -> Solver i Identity (T ode) a) ->
     IVP ode a ->
+    -- | Initial time step
+    a ->
     -- | Tolerance
     a ->
     DETest
@@ -65,20 +60,12 @@ data DETest where
 -}
 
 instance IsTest DETest where
-  run _ (Compare sols ivp tol) _ = do
-    let IVP de exact (t0, t1) ts y0 = ivp
-    let solutions = [solver de (t0, t1) y0 | solver <- sols]
-    let pts = V.fromList $ linspace 10 t0 t1
-    let solvedPts = [V.map (\t -> interp de t solution) pts | solution <- solutions]
-    let go (xs, ys) = V.maximum $ V.map norm $ V.zipWith (^-^) xs ys
-    let max_err = maximum $ go <$> ((,) <$> solvedPts <*> solvedPts)
-    return $
-      if max_err >= tol
-        then testFailed ("unacceptable error " ++ show max_err)
-        else testPassed ""
-  run _ (DETest stepInt timeCont ivp tol) _ = do
-    let IVP de exact (t0, t1) ts y0 = ivp
-    let interps = runIntegration (stepInt de) timeCont (y0, TimeStep {t = t0, delta = (t1 - t0)}) (last ts)
+  run _ (DETest sol ivp h tol) _ = do
+    let IVP de exact (t0, tf) ts y0 = ivp
+    let interps' = runIntegration ((\(_, a) -> ((), a)) <$> sol de) (y0, t0) h tf
+    interps <- case runExcept (runWriterT interps') of
+      Left (SolverErr err) -> error err
+      Right (x, _info) -> pure x
     let exacts = exact <$> ts
     let ys = evalSol de ts interps
     let max_err = maximum . fmap norm $ zipWith (^-^) ys exacts
