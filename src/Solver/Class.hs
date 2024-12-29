@@ -1,4 +1,6 @@
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -12,28 +14,33 @@ module Solver.Class
     h312PID,
     constantStepper,
     type StepController,
-    type StepIntegrator,
+    type Solver,
     ErrorEstimate (..),
     TimeStep (..),
     runIntegration,
-    solvingMachine,
   )
 where
 
 import Control.Arrow (Arrow (..))
 import Control.Category (Category (..), (>>>))
+import Control.Monad.Except (Except, ExceptT)
 import Control.Monad.Identity (Identity)
 import Control.Monad.RWS
 import Control.Monad.Reader (ReaderT)
 import Control.Monad.State
+import Control.Monad.Writer.CPS (WriterT)
 import Data.Data (Proxy)
+import Data.Functor.Compose (Compose (..))
 import Data.Functor.Rep
 import Data.Kind (Type)
-import Data.Machine (Is, Machine, Plan, PlanT, auto, await, construct, run, source, taking, yield)
+import Data.Machine (Is, Machine, MachineT (runMachineT), Plan, PlanT, ProcessT, Step (..), auto, await, construct, run, source, supply, taking, yield)
 import Data.Machine.Mealy (Mealy (..), unfoldMealy)
+import Data.Machine.MealyT (MealyT (runMealyT), upgrade)
 import Data.Machine.Process (Process, takingWhile, (~>))
+import Data.Machine.Runner (runT)
+import Data.Semigroup (Sum)
 import Debug.Trace (traceShow, traceShowId)
-import GHC.Generics (Generic)
+import GHC.Generics (Generic, Generically)
 import Interpolate
 import Linear
 import Optics hiding (Is)
@@ -41,56 +48,74 @@ import Term
 import Prelude hiding ((.))
 
 runIntegration ::
-  forall a v solver stepper.
-  (Real a, Floating a, Ord a, Show a, Additive v) =>
-  StepIntegrator v a ->
-  StepController a ->
-  (v a, TimeStep a) ->
+  forall a v m.
+  (Real a, Floating a, Ord a, Show a, Additive v, Monad m) =>
+  Solver () m v a ->
+  (v a, a) ->
   a ->
-  [Interp v a]
-runIntegration stepIntegrator stepController (y0, t0) tf =
-  run $
-    source [(y0, t0)] ~> solveMach ~> takingWhile (\(Poly (_t0, t1) _) -> tf >= t1)
-  where
-    solveMach = solvingMachine stepIntegrator stepController
+  a ->
+  WriterT SolverInfo (ExceptT SolverErr m) [Interp v a]
+runIntegration solver (y0, t0) h tf =
+  runT $
+    source [(y0, TimeStep t0 h)] ~> (snd <$> solver) ~> takingWhile (\(Poly (_t0, t1) _) -> tf >= t1)
 
-buildStep ::
-  StepIntegrator v a ->
-  StepController a ->
-  Mealy (v a, TimeStep a) (Either (TimeStep a) (Interp v a, TimeStep a))
-buildStep sol stp = fmap sequence $ (sol &&& arr snd) >>> lAssoc >>> second stp
-  where
-    lAssoc = arr $ \((int, err), tst) -> (int, (err, tst))
-
-solvingMachine ::
-  forall a v k.
+controlledStep ::
+  forall a v.
   (Show a, Num a, Additive v) =>
-  StepIntegrator v a ->
-  StepController a ->
-  Machine (Is (v a, TimeStep a)) (Interp v a) -- Plan (Is (v a, TimeStep a)) (Interp v a) ()
-solvingMachine sol stp = construct $ await >>= loop mealy
+  Solver (ErrorEstimate a) Identity v a ->
+  StepController Identity a ->
+  Solver () Identity v a
+controlledStep sol stp = undefined
   where
-    lAssoc = arr $ \((int, err), tst) -> (int, (err, tst))
-    -- integrate step, then check error and reject/accept with new step
-    mealy = (sol &&& arr snd) >>> lAssoc >>> second stp >>> arr sequence
-    loop ::
-      forall k m.
-      (Monad m) =>
-      Mealy (v a, TimeStep a) (Either (TimeStep a) (Interp v a, TimeStep a)) ->
+    go ::
+      Solver (ErrorEstimate a) Identity v a ->
+      StepController Identity a ->
       (v a, TimeStep a) ->
-      PlanT (Is (v a, TimeStep a)) (Interp v a) m ()
-    loop mealy (y0, h) = do
-      let (ret, mealy') = runMealy mealy (y0, h)
-      case ret of
-        -- accepted
-        Right (interp, h') -> yield interp >> loop mealy' (rightMost interp, h')
-        -- rejected
-        Left h' -> loop mealy' (y0, h')
+      PlanT (Is (v a, TimeStep a)) (Interp v a) (WriterT SolverInfo (Except SolverErr)) ()
+    go sol stpMeal (y0, t) = do
+      ((err, interp), sol') <- lift (runMachineT (supply [(y0, t)] sol)) >>= (\(Yield x k) -> pure (x, k))
+
+      (t', stpMeal') <- lift $ runMealyT stp (err, t)
+
+      case t' of
+        Left t' -> go sol' stpMeal' (y0, t')
+        Right t' -> yield interp
 
 interpTimeStep :: (Num a) => Interp v a -> TimeStep a
 interpTimeStep (Poly (t0, t1) _) = TimeStep {t = t0, delta = t1 - t0}
 
-type StepIntegrator v a = Mealy (v a, TimeStep a) (Interp v a, ErrorEstimate a)
+-- | A solver takes in a point and a time step and returns an interpolant over the interval,
+-- along with some auxiliary information.
+-- The solver is allowed to perform effects, in particular log information
+-- about the solving process and throw errors.
+type Solver i m v a =
+  ProcessT (WriterT SolverInfo (ExceptT SolverErr m)) (v a, TimeStep a) (i, Interp v a)
+
+-- | Information about a particular step taken by an integrator.
+-- No information, but may later contain
+--   - rejection count
+--   - truncation error estimates
+--   - convergence rate for newton solvers
+data StepInfo = StepInfo
+  deriving (Show)
+
+data SolverInfo = SolverInfo Int [StepInfo]
+  deriving (Show)
+
+instance Semigroup SolverInfo where
+  (<>) :: SolverInfo -> SolverInfo -> SolverInfo
+  (SolverInfo n1 s1) <> (SolverInfo n2 s2) =
+    SolverInfo (n1 + n2) (s1 <> s2)
+
+instance Monoid SolverInfo where
+  mempty :: SolverInfo
+  mempty = SolverInfo 0 []
+
+-- | Error thrown by solver when an issue occurs.
+-- For now just a plain string, but will later include more info.
+-- Could be that the newton solver fails to converge or that the stepper
+-- has too many rejections.
+data SolverErr = SolverErr String
 
 data ErrorEstimate a = ErrorEstimate a Int
   deriving (Show)
@@ -98,10 +123,18 @@ data ErrorEstimate a = ErrorEstimate a Int
 data TimeStep a = TimeStep {t :: a, delta :: a}
   deriving (Show)
 
-type StepController a = Mealy (ErrorEstimate a, TimeStep a) (Either (TimeStep a) (TimeStep a))
+-- | Step size controller
+-- This will adjust step size based on estimated error.
+-- The returned value indicates acceptance or rejection of the proposed
+-- timestep and a new time step to try.
+type StepController m a =
+  MealyT
+    (WriterT SolverInfo (ExceptT SolverErr m))
+    (ErrorEstimate a, TimeStep a)
+    (Either (TimeStep a) (TimeStep a))
 
-constantStepper :: (Num a) => StepController a
-constantStepper = unfoldMealy go ()
+constantStepper :: (Num a) => StepController Identity a
+constantStepper = upgrade $ unfoldMealy go ()
   where
     go _ (_errEst, TimeStep {t, delta}) =
       let t' = t + delta
@@ -118,7 +151,7 @@ data StepperPID a = StepperPID
   }
   deriving (Generic)
 
-mkStepperPID :: (Floating a, Ord a) => a -> a -> a -> StepController a
+mkStepperPID :: (Floating a, Ord a) => a -> a -> a -> StepController Identity a
 mkStepperPID p i d =
   pidStepController
     StepperPID
@@ -134,17 +167,17 @@ mkStepperPID p i d =
     beta_2 = -(p + 2 * d)
     beta_3 = d
 
-mkStepperPI :: (Floating a, Ord a) => a -> a -> StepController a
+mkStepperPI :: (Floating a, Ord a) => a -> a -> StepController Identity a
 mkStepperPI p i = mkStepperPID p i 0
 
-mkStepperI :: (Floating a, Ord a) => a -> StepController a
+mkStepperI :: (Floating a, Ord a) => a -> StepController Identity a
 mkStepperI i = mkStepperPID 0 i 0
 
-defaultStepperPI :: (Floating a, Ord a) => StepController a
+defaultStepperPI :: (Floating a, Ord a) => StepController Identity a
 defaultStepperPI = mkStepperPI 0.2 1.0
 
-pidStepController :: forall a. (Ord a, Floating a) => StepperPID a -> StepController a
-pidStepController pid = unfoldMealy go pid
+pidStepController :: forall a. (Ord a, Floating a) => StepperPID a -> StepController Identity a
+pidStepController pid = upgrade $ unfoldMealy go pid
   where
     go :: StepperPID a -> (ErrorEstimate a, TimeStep a) -> (Either (TimeStep a) (TimeStep a), StepperPID a)
     go pid@StepperPID {..} (ErrorEstimate err _, TimeStep {..})
@@ -162,7 +195,7 @@ pidStepController pid = unfoldMealy go pid
         prop' = min 2 . max 0.5 $ 1 / prop
         delta' = prop' * delta
 
-basicI :: (Floating a, Ord a) => StepController a
+basicI :: (Floating a, Ord a) => StepController Identity a
 basicI =
   pidStepController
     StepperPID
@@ -174,7 +207,7 @@ basicI =
         beta_3 = 0.0
       }
 
-pi42 :: (Floating a, Ord a) => StepController a
+pi42 :: (Floating a, Ord a) => StepController Identity a
 pi42 =
   pidStepController
     StepperPID
@@ -186,7 +219,7 @@ pi42 =
         beta_3 = 0.0
       }
 
-pi33 :: (Floating a, Ord a) => StepController a
+pi33 :: (Floating a, Ord a) => StepController Identity a
 pi33 =
   pidStepController
     StepperPID
@@ -198,7 +231,7 @@ pi33 =
         beta_3 = 0.0
       }
 
-pi34 :: (Floating a, Ord a) => StepController a
+pi34 :: (Floating a, Ord a) => StepController Identity a
 pi34 =
   pidStepController
     StepperPID
@@ -210,7 +243,7 @@ pi34 =
         beta_3 = 0.0
       }
 
-h211PI :: (Floating a, Ord a) => StepController a
+h211PI :: (Floating a, Ord a) => StepController Identity a
 h211PI =
   pidStepController
     StepperPID
@@ -222,7 +255,7 @@ h211PI =
         beta_3 = 0.0
       }
 
-h312PID :: (Floating a, Ord a) => StepController a
+h312PID :: (Floating a, Ord a) => StepController Identity a
 h312PID =
   pidStepController
     StepperPID
