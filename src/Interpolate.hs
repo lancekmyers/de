@@ -2,6 +2,7 @@ module Interpolate
   ( Interp (..),
     interp,
     rightMost,
+    timeInterval,
     evalSol,
     knots,
     mkH4,
@@ -11,15 +12,14 @@ module Interpolate
 where
 
 import Data.Vector (Vector)
-import qualified Data.Vector as V
+import Data.Vector qualified as V
 import Linear
 import Optics (prism')
 import Term
-import Debug.Trace (traceShow)
 
 data Interp v a
   = Poly (a, a) (Vector (v a))
-  deriving Show
+  deriving (Show)
 
 interp ::
   forall de a.
@@ -59,16 +59,33 @@ mkH4 de (t0, t1) ymid y0 y1 f0 f1 = Poly (t0, t1) coeffs
     f1' = prod de f1 w
     f0' = prod de f0 w
     _a =
-      2 *^ (f1' ^-^ f0')
-        ^-^ 8 *^ (y1 ^+^ y0) ^+^ 16 *^ ymid
+      2
+        *^ (f1' ^-^ f0')
+        ^-^ 8
+        *^ (y1 ^+^ y0)
+        ^+^ 16
+        *^ ymid
     _b =
-      5 *^ f0' ^-^ 3 *^ f1'
-        ^+^ 18 *^ y0
-        ^+^ 14 *^ y1 ^-^ 32 *^ ymid
+      5
+        *^ f0'
+        ^-^ 3
+        *^ f1'
+        ^+^ 18
+        *^ y0
+        ^+^ 14
+        *^ y1
+        ^-^ 32
+        *^ ymid
     _c =
-      f1' ^-^ 4 *^ f0'
-        ^-^ 11 *^ y0
-        ^-^ 5 *^ y1 ^+^ 16 *^ ymid
+      f1'
+        ^-^ 4
+        *^ f0'
+        ^-^ 11
+        *^ y0
+        ^-^ 5
+        *^ y1
+        ^+^ 16
+        *^ ymid
     coeffs = V.fromList [_a, _b, _c, f0', y0]
 
 mkH3 ::
@@ -121,7 +138,7 @@ evalSol ::
   Solution de a ->
   [T de a]
 evalSol de [] _ = []
-evalSol de rest@(t:_) [] = error $ "not enough intervals " ++ show t ++ " " ++ show (length rest)
+evalSol de rest@(t : _) [] = error $ "not enough intervals " ++ show t ++ " " ++ show (length rest)
 evalSol de (t : ts) (i : is)
   | contains i t = (interp de t i) : evalSol de ts (i : is)
   | otherwise = evalSol de (t : ts) is
@@ -129,5 +146,5 @@ evalSol de (t : ts) (i : is)
 knots :: (Num a, Additive v) => [Interp v a] -> [(a, v a)]
 knots [] = []
 knots (i : is) =
-  (fst $ timeInterval i, leftMost i) :
-    [(snd $ timeInterval i, rightMost i) | i <- is]
+  (fst $ timeInterval i, leftMost i)
+    : [(snd $ timeInterval i, rightMost i) | i <- is]
