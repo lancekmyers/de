@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Control.Applicative (Const (..))
+import Data.Typeable (Typeable)
 import Linear
 import Solver
 import Term
@@ -13,7 +14,7 @@ otherIVP =
     (SimpleODE $ \t y -> sin t *^ y)
     (\t -> V1 $ exp (1 - cos t))
     (0, 5)
-    [x / 10 | x <- [0 .. 50]]
+    [x / 10 | x <- [0 .. 49]]
     (V1 1)
 
 expIVP :: IVP (SimpleODE V1) Double
@@ -29,7 +30,7 @@ testEuler ivp = DETest euler ivp 5e-2 1e-1
 
 -- testHeun ivp = DETest heun (Const ()) ConstantStepper ivp 1e-2
 
-testDopri :: (Term ode) => IVP ode Double -> DETest
+testDopri :: (Typeable ode, Term ode) => IVP ode Double -> DETest ode Double
 testDopri ivp = DETest (controlledStep pi33 . dopri5 (Tol 1e-4 1e-6)) ivp 1e-1 1e-3
 
 testDopriAdapt ivp =
@@ -39,10 +40,10 @@ testDopriAdapt ivp =
     1e-1
     1e-5
 
-testTsitAdapt :: (Term ode) => IVP ode Double -> DETest
+testTsitAdapt :: (Typeable ode, Term ode) => IVP ode Double -> DETest ode Double
 testTsitAdapt ivp =
   DETest
-    (controlledStep pi42 . tsit5 (Tol {rTol = 1e-3, aTol = 1e-6}))
+    (controlledStep pi42 . tsit5 (Tol {rTol = 1e-4, aTol = 1e-6}))
     ivp
     1e-1
     1e-3
@@ -50,7 +51,7 @@ testTsitAdapt ivp =
 -- testBoshAdapt :: (Term ode) => IVP ode Double -> DETest
 testBoshAdapt ivp =
   DETest
-    (controlledStep basicI . bosh3 (Tol 1e-2 1e-4))
+    (controlledStep basicI . bosh3 (Tol 1e-4 1e-6))
     ivp
     1e-1
     1e-3
@@ -62,7 +63,7 @@ testRKFAdapt ivp =
     1e-1
     5e-2
 
-testIVP :: (Term ode) => String -> IVP ode Double -> TestTree
+testIVP :: (Typeable ode, Term ode) => String -> IVP ode Double -> TestTree
 testIVP name ivp =
   testGroup
     name

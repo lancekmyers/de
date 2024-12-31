@@ -5,6 +5,7 @@ module Tester where
 import Control.Monad.Except (runExcept)
 import Control.Monad.Identity (Identity)
 import Control.Monad.Writer.Lazy (runWriterT)
+import Data.Typeable (Typeable)
 import Data.Vector qualified as V
 import Interpolate
 import Linear
@@ -36,16 +37,8 @@ data Reference de a where
     Solver () Identity (T de) a ->
     Reference de a
 
-data DETest where
+data DETest ode a where
   DETest ::
-    forall sol stepper ode a i.
-    ( Floating a,
-      Real a,
-      Show a,
-      Ord a,
-      Term ode,
-      Metric (T ode)
-    ) =>
     -- | Solver to test
     (ode a -> Solver i Identity (T ode) a) ->
     IVP ode a ->
@@ -53,13 +46,13 @@ data DETest where
     a ->
     -- | Tolerance
     a ->
-    DETest
+    DETest ode a
 
 {-
   Also need a way to generate html + plots for these
 -}
 
-instance IsTest DETest where
+instance (Typeable ode, Term ode) => IsTest (DETest ode Double) where
   run _ (DETest sol ivp h tol) _ = do
     let IVP de exact (t0, tf) ts y0 = ivp
     let interps' = runIntegration ((\(_, a) -> ((), a)) <$> sol de) (y0, t0) h tf
@@ -72,6 +65,8 @@ instance IsTest DETest where
     let last_err = norm $ last ys ^-^ last exacts
     return $
       if max_err / tol >= 1
-        then testFailed ("unacceptable error " ++ show max_err ++ " | " ++ show last_err)
+        then
+          testFailed $
+            "unacceptable error " ++ show max_err
         else testPassed ""
   testOptions = pure []
