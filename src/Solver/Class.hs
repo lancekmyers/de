@@ -60,7 +60,7 @@ runIntegration ::
   WriterT SolverInfo (ExceptT SolverErr m) [Interp v a]
 runIntegration solver (y0, t0) h tf =
   runT $
-    source [(y0, TimeStep t0 h)] ~> (snd <$> solver) ~> takingWhile (\(Poly (_t0, t1) _) -> tf >= t1)
+    source [(y0, TimeStep t0 h)] ~> (snd <$> solver) ~> takingWhile (\(Poly (t0, t1) _) -> t0 < tf)
 
 controlledStep ::
   forall a v.
@@ -82,7 +82,7 @@ controlledStep stp sol = construct (await >>= go sol stp)
 
       case t' of
         Left t' -> go sol' stpMeal' (y0, t')
-        Right t' -> yield ((), interp)
+        Right t' -> yield ((), interp) >> go sol' stpMeal' (rightMost interp, t')
 
 interpTimeStep :: (Num a) => Interp v a -> TimeStep a
 interpTimeStep (Poly (t0, t1) _) = TimeStep {t = t0, delta = t1 - t0}
