@@ -18,11 +18,6 @@ data BT n a = BT
     b_hat :: V n a
   }
 
--- | ODE that comes with jacobian
-data JacODE v a = JacODE
-  { jac :: a -> v a -> v (v a),
-    vf :: a -> v a -> v a
-  }
 
 step ::
   forall v a n.

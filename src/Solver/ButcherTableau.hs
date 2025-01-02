@@ -25,7 +25,7 @@ import Interpolate
 import Linear
 import Linear.V
 import Optics
-import Solver.Class (ErrorEstimate (..), Solver, SolverInfo, TimeStep (..))
+import Solver.Class (ErrorEstimate (..), Solver, SolverInfo, TimeStep (..), Tol (..))
 import Term
 
 -- | Weighted sum of vector s
@@ -95,19 +95,8 @@ erk BT {..} ics Tol {..} ode = autoT $ arrM go
             let coeffs = ((flip (prod ode) u) . (flip wsum ks) <$> mat) `V.snoc` y0
              in Poly (t0, t1) coeffs
 
--- | Iterpolation Coefficients
-data IC a
-  = InterpLinear
-  | -- use the normal Hermite 3rd order polynomial
-    PlainH3
-  | -- coeffs for computing midpoint to construct Hermite 4th order polynomial
-    MidPointH4 (V.Vector a)
-  | InterpMatrix (V.Vector (V.Vector a))
-
 -- data ERK_State v a = ERK_State {errEst :: a}
 --   deriving (Generic)
-
-data Tol a = Tol {aTol :: a, rTol :: a}
 
 -- instance (Term ode) => Solver ERK ode where
 --   type SolState ERK ode = ERK_State (T ode)

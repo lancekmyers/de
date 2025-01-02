@@ -1,5 +1,6 @@
 module Interpolate
   ( Interp (..),
+    IC (..),
     interp,
     rightMost,
     timeInterval,
@@ -148,3 +149,12 @@ knots [] = []
 knots (i : is) =
   (fst $ timeInterval i, leftMost i)
     : [(snd $ timeInterval i, rightMost i) | i <- is]
+
+-- | Iterpolation Coefficients
+data IC a
+  = InterpLinear
+  | -- use the normal Hermite 3rd order polynomial
+    PlainH3
+  | -- coeffs for computing midpoint to construct Hermite 4th order polynomial
+    MidPointH4 (V.Vector a)
+  | InterpMatrix (V.Vector (V.Vector a))

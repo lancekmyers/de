@@ -20,6 +20,7 @@ module Solver.Class
     SolverErr (..),
     ErrorEstimate (..),
     TimeStep (..),
+    Tol (..),
     runIntegration,
   )
 where
@@ -125,6 +126,8 @@ data ErrorEstimate a = ErrorEstimate a Int
 
 data TimeStep a = TimeStep {t :: a, delta :: a}
   deriving (Show)
+
+data Tol a = Tol {aTol :: a, rTol :: a}
 
 -- | Step size controller
 -- This will adjust step size based on estimated error.
